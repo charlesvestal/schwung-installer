@@ -37,6 +37,10 @@ function createWindow() {
         return { action: 'deny' };
     });
 
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
+
     // Set main window in backend for logging
     backend.setMainWindow(mainWindow);
 }
