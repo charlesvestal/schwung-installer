@@ -29,7 +29,7 @@ function setMainWindow(win) {
 const originalLog = console.log;
 console.log = function(...args) {
     originalLog.apply(console, args);
-    if (mainWindowForLogging && mainWindowForLogging.webContents) {
+    if (mainWindowForLogging && !mainWindowForLogging.isDestroyed() && mainWindowForLogging.webContents) {
         mainWindowForLogging.webContents.send('backend-log', args.join(' '));
     }
 };
@@ -37,7 +37,7 @@ console.log = function(...args) {
 const originalError = console.error;
 console.error = function(...args) {
     originalError.apply(console, args);
-    if (mainWindowForLogging && mainWindowForLogging.webContents) {
+    if (mainWindowForLogging && !mainWindowForLogging.isDestroyed() && mainWindowForLogging.webContents) {
         mainWindowForLogging.webContents.send('backend-log', '[ERROR] ' + args.join(' '));
     }
 };
