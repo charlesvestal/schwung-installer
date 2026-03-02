@@ -1469,6 +1469,7 @@ function getInstallSubdir(componentType) {
         case 'midi_fx': return 'midi_fx';
         case 'utility': return 'utilities';
         case 'overtake': return 'overtake';
+        case 'tool': return 'tools';
         default: return 'other';
     }
 }
