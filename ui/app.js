@@ -611,7 +611,8 @@ function setupInstallationOptions() {
                 'audio_fx': 'Audio Effects',
                 'midi_fx': 'MIDI Effects',
                 'utility': 'Utilities',
-                'overtake': 'Overtake'
+                'overtake': 'Overtake',
+                'tool': 'Tools'
             };
             const grouped = {};
             state.allModules.forEach(m => {
@@ -678,7 +679,8 @@ function displayModules(modules) {
         'audio_fx': { title: 'Audio Effects', modules: [] },
         'midi_fx': { title: 'MIDI Effects', modules: [] },
         'utility': { title: 'Utilities', modules: [] },
-        'overtake': { title: 'Overtake Modules', modules: [] }
+        'overtake': { title: 'Overtake Modules', modules: [] },
+        'tool': { title: 'Tools', modules: [] }
     };
 
     modules.forEach(module => {
@@ -802,6 +804,7 @@ function getInstallSubdir(componentType) {
         case 'midi_fx': return 'midi_fx';
         case 'utility': return 'utilities';
         case 'overtake': return 'overtake';
+        case 'tool': return 'tools';
         default: return 'other';
     }
 }
@@ -900,7 +903,8 @@ function displayManagementModules() {
         'audio_fx': { title: 'Audio Effects', modules: [] },
         'midi_fx': { title: 'MIDI Effects', modules: [] },
         'utility': { title: 'Utilities', modules: [] },
-        'overtake': { title: 'Overtake Modules', modules: [] }
+        'overtake': { title: 'Overtake Modules', modules: [] },
+        'tool': { title: 'Tools', modules: [] }
     };
 
     const upgradableIds = new Set(versionInfo.upgradableModules.map(m => m.id));

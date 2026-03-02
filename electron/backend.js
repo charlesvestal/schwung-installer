@@ -1903,7 +1903,9 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
                             id: moduleInfo.id,
                             name: moduleInfo.name || moduleInfo.id,
                             version: moduleInfo.version,
-                            component_type: moduleInfo.component_type || 'utility'
+                            component_type: moduleInfo.component_type
+                                || (moduleInfo.capabilities && moduleInfo.capabilities.component_type)
+                                || 'utility'
                         };
                         // Include assets info if declared
                         if (moduleInfo.assets) {
