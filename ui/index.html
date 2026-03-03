@@ -187,6 +187,8 @@
                 <span class="secondary-divider">|</span>
                 <a href="#" id="link-standalone">Standalone Mode</a>
                 <span class="secondary-divider">|</span>
+                <a href="#" id="link-wifi">WiFi</a>
+                <span class="secondary-divider">|</span>
                 <a href="#" id="link-uninstall">Uninstall</a>
             </div>
         </div>
@@ -245,6 +247,45 @@
                     </div>
                 </div>
                 <div id="asset-browser-status" class="asset-status"></div>
+            </div>
+        </div>
+        <!-- WiFi Manager Modal -->
+        <div id="wifi-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-content wifi-modal-content">
+                <div class="modal-header">
+                    <h2>WiFi Networks</h2>
+                    <button id="wifi-modal-close" class="modal-close-btn">&times;</button>
+                </div>
+                <div id="wifi-warning" class="wifi-warning" style="display: none;">
+                    You appear to be connected via WiFi. Changing networks will disconnect this session.
+                </div>
+                <div id="wifi-status-bar" class="wifi-status-bar">
+                    <span id="wifi-status-dot" class="wifi-status-dot"></span>
+                    <span id="wifi-status-text">Checking...</span>
+                </div>
+                <div id="wifi-disabled-view" style="display: none;">
+                    <div class="wifi-disabled-message">
+                        <p>WiFi radio is currently disabled on your Move.</p>
+                        <button id="wifi-enable-btn" class="btn-action">Enable WiFi</button>
+                    </div>
+                </div>
+                <div id="wifi-network-view">
+                    <div class="wifi-toolbar">
+                        <button id="wifi-scan-btn" class="btn-action">Scan for Networks</button>
+                    </div>
+                    <div id="wifi-network-list" class="wifi-network-list"></div>
+                </div>
+                <div id="wifi-password-view" style="display: none;">
+                    <div class="wifi-password-form">
+                        <p id="wifi-password-label">Enter password for <strong id="wifi-password-network-name"></strong></p>
+                        <input type="password" id="wifi-password-input" placeholder="WiFi password" autocomplete="off" />
+                        <div class="wifi-password-actions">
+                            <button id="wifi-password-cancel" class="secondary">Cancel</button>
+                            <button id="wifi-password-connect" class="btn-action">Connect</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="wifi-status" class="asset-status"></div>
             </div>
         </div>
     </div>
