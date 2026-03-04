@@ -2497,6 +2497,190 @@ async function testSshFormats(cookie) {
     return results;
 }
 
+// --- WiFi Management Helpers ---
+
+function parseServiceLine(line) {
+    if (!line || !line.trim()) return null;
+    // Flags are at fixed positions in the raw line (before trimming):
+    // pos 0: '*' (favorite/saved), pos 1: 'A' (auto-connect), pos 2: 'O'/'R' (state)
+    const flagChars = line.substring(0, 4);
+    const isSaved = flagChars[0] === '*';
+    const isAutoConnect = flagChars[1] === 'A';
+    const isReady = flagChars[2] === 'R';
+    const isOnline = flagChars[2] === 'O';
+    const rest = line.substring(4).trim();
+    // Service ID is always the last whitespace-delimited token starting with wifi_
+    const tokens = rest.split(/\s+/);
+    const serviceId = [...tokens].reverse().find(t => t.startsWith('wifi_'));
+    if (!serviceId) return null;
+    // Network name is everything before the service ID
+    const nameEnd = rest.lastIndexOf(serviceId);
+    const name = rest.substring(0, nameEnd).trim();
+    // Derive security from service ID suffix
+    let security = 'unknown';
+    if (serviceId.endsWith('_psk')) security = 'WPA';
+    else if (serviceId.endsWith('_wep')) security = 'WEP';
+    else if (serviceId.endsWith('_none')) security = 'open';
+    else if (serviceId.includes('_ieee8021x')) security = 'Enterprise';
+    return {
+        name: name || '(Hidden Network)',
+        serviceId,
+        security,
+        connected: isReady,
+        saved: isSaved,
+        online: isOnline,
+        ready: isReady
+    };
+}
+
+function parseServices(output) {
+    if (!output) return [];
+    return output.split('\n').map(parseServiceLine).filter(Boolean);
+}
+
+function extractSsidFromServiceId(serviceId) {
+    // Format: wifi_<mac>_<hexssid>_managed_<security>
+    const parts = serviceId.split('_');
+    // parts[0]=wifi, parts[1]=mac, parts[2]=hexssid, ...
+    if (parts.length < 3) return serviceId;
+    const hexSsid = parts[2];
+    try {
+        return Buffer.from(hexSsid, 'hex').toString('utf8');
+    } catch {
+        return hexSsid;
+    }
+}
+
+// --- WiFi Management Functions ---
+
+async function wifiGetStatus(hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    let wifiEnabled = false;
+    let connectedService = null;
+    const isUsbConnection = cachedDeviceIp ? /^192\.168\.7\./.test(cachedDeviceIp) : false;
+
+    try {
+        const techOutput = await sshExec(hostIp, 'connmanctl technologies');
+        // Check if WiFi technology is powered on
+        const wifiSection = techOutput.split('/net/connman/technology/wifi');
+        if (wifiSection.length > 1) {
+            const sectionText = wifiSection[1].split('/net/connman/technology/')[0] || wifiSection[1];
+            wifiEnabled = /Powered\s*=\s*True/i.test(sectionText);
+        }
+    } catch (err) {
+        console.log('[WIFI] Error checking technologies:', err.message);
+    }
+
+    try {
+        const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+        const services = parseServices(servicesOutput);
+        connectedService = services.find(s => s.connected) || null;
+    } catch (err) {
+        console.log('[WIFI] Error listing services:', err.message);
+    }
+
+    return { wifiEnabled, connectedService, isUsbConnection };
+}
+
+async function wifiScan(hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    try {
+        await sshExec(hostIp, 'connmanctl scan wifi');
+    } catch (err) {
+        console.log('[WIFI] Scan command error (may be normal):', err.message);
+    }
+    // Wait for scan to complete
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+    return parseServices(servicesOutput);
+}
+
+async function wifiListServices(hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+    return parseServices(servicesOutput);
+}
+
+async function wifiConnect(hostname, serviceId, passphrase) {
+    const hostIp = cachedDeviceIp || hostname;
+    // Connman on the Move stores service data in /data/settings/connman/lib/connman/
+    const connmanDataDir = '/data/settings/connman/lib/connman';
+
+    if (passphrase) {
+        // Extract the hex SSID from the service ID (third underscore-delimited segment)
+        const parts = serviceId.split('_');
+        const hexSsid = parts.length >= 3 ? parts[2] : '';
+        const ssid = extractSsidFromServiceId(serviceId);
+
+        // Write a connman service settings file directly — same format as saved networks
+        const settingsDir = `${connmanDataDir}/${serviceId}`;
+        const settingsContent = `[${serviceId}]\\nName=${ssid}\\nSSID=${hexSsid}\\nFavorite=true\\nAutoConnect=true\\nPassphrase=${passphrase.replace(/\\/g, '\\\\').replace(/'/g, "'\\''")}\\nIPv4.method=dhcp\\nIPv6.method=auto\\nIPv6.privacy=disabled\\n`;
+
+        console.log('[WIFI] Writing service settings for:', ssid);
+        try {
+            await sshExec(hostIp, `mkdir -p ${settingsDir}`, { username: 'root' });
+            await sshExec(hostIp, `printf '${settingsContent}' > ${settingsDir}/settings`, { username: 'root' });
+        } catch (err) {
+            throw new Error(`Failed to write WiFi settings: ${err.message}`);
+        }
+
+        // Connman only reads settings from disk at startup — restart it to load credentials,
+        // then explicitly connect (otherwise it reconnects to the previous favorite).
+        try {
+            console.log('[WIFI] Restarting connman to pick up new credentials...');
+            await sshExec(hostIp, `/etc/init.d/connman restart`, { username: 'root' });
+        } catch (err) {
+            if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
+                console.log('[WIFI] SSH dropped during connman restart (expected)');
+            } else {
+                throw new Error(`Failed to restart connman: ${err.message}`);
+            }
+        }
+        // Wait for connman to come back and reconnect to WiFi
+        await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    // Connect to the target network (works for new, open, and saved networks)
+    try {
+        console.log('[WIFI] Connecting to:', serviceId);
+        await sshExec(hostIp, `nohup connmanctl connect ${serviceId} > /dev/null 2>&1 &`);
+    } catch (err) {
+        if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
+            console.log('[WIFI] SSH dropped during connect (expected when switching networks)');
+            return;
+        }
+        throw new Error(`Failed to connect: ${err.message}`);
+    }
+}
+
+async function wifiDisconnect(hostname, serviceId) {
+    const hostIp = cachedDeviceIp || hostname;
+    try {
+        await sshExec(hostIp, `nohup connmanctl disconnect ${serviceId} > /dev/null 2>&1 &`);
+    } catch (err) {
+        // SSH drop is expected when disconnecting the active WiFi network
+        if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
+            console.log('[WIFI] SSH dropped during disconnect (expected)');
+            return;
+        }
+        throw err;
+    }
+}
+
+async function wifiRemoveService(hostname, serviceId) {
+    const hostIp = cachedDeviceIp || hostname;
+    await sshExec(hostIp, `connmanctl config ${serviceId} --remove`);
+    // Also remove the service settings directory
+    try {
+        await sshExec(hostIp, `rm -rf /data/settings/connman/lib/connman/${serviceId}`, { username: 'root' });
+    } catch {}
+}
+
+async function wifiEnableRadio(hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    await sshExec(hostIp, 'connmanctl enable wifi', { username: 'root' });
+}
+
 module.exports = {
     setMainWindow,
     validateDevice,
@@ -2537,5 +2721,12 @@ module.exports = {
     cleanDeviceTmp,
     fixPermissions,
     checkInstallerUpdate,
-    clearDnsCache
+    clearDnsCache,
+    wifiGetStatus,
+    wifiScan,
+    wifiListServices,
+    wifiConnect,
+    wifiDisconnect,
+    wifiRemoveService,
+    wifiEnableRadio
 };

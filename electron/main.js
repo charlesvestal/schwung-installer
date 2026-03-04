@@ -255,6 +255,35 @@ ipcMain.handle('fix_permissions', async (event, { hostname }) => {
     return await backend.fixPermissions(hostname);
 });
 
+// --- WiFi Management ---
+ipcMain.handle('wifi_get_status', async (event, { hostname }) => {
+    return await backend.wifiGetStatus(hostname);
+});
+
+ipcMain.handle('wifi_scan', async (event, { hostname }) => {
+    return await backend.wifiScan(hostname);
+});
+
+ipcMain.handle('wifi_list_services', async (event, { hostname }) => {
+    return await backend.wifiListServices(hostname);
+});
+
+ipcMain.handle('wifi_connect', async (event, { hostname, serviceId, passphrase }) => {
+    return await backend.wifiConnect(hostname, serviceId, passphrase);
+});
+
+ipcMain.handle('wifi_disconnect', async (event, { hostname, serviceId }) => {
+    return await backend.wifiDisconnect(hostname, serviceId);
+});
+
+ipcMain.handle('wifi_remove_service', async (event, { hostname, serviceId }) => {
+    return await backend.wifiRemoveService(hostname, serviceId);
+});
+
+ipcMain.handle('wifi_enable_radio', async (event, { hostname }) => {
+    return await backend.wifiEnableRadio(hostname);
+});
+
 ipcMain.handle('export_logs', async (event, { logs }) => {
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
         title: 'Save Debug Logs',

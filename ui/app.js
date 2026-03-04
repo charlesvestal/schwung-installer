@@ -832,6 +832,15 @@ const assetBrowser = {
     loading: false
 };
 
+// --- WiFi Manager State ---
+const wifiManager = {
+    open: false,
+    loading: false,
+    networks: [],
+    isUsbConnection: false,
+    passwordTarget: null
+};
+
 async function processModuleOpQueue() {
     if (moduleOpRunning || moduleOpQueue.length === 0) return;
     moduleOpRunning = true;
@@ -2200,6 +2209,274 @@ function closeApplication() {
     window.close();
 }
 
+// --- WiFi Manager Functions ---
+
+async function openWifiManager() {
+    wifiManager.open = true;
+    wifiManager.networks = [];
+    wifiManager.passwordTarget = null;
+    document.getElementById('wifi-modal').style.display = 'flex';
+    document.getElementById('wifi-network-view').style.display = '';
+    document.getElementById('wifi-password-view').style.display = 'none';
+    document.getElementById('wifi-disabled-view').style.display = 'none';
+    document.getElementById('wifi-warning').style.display = 'none';
+    document.getElementById('wifi-network-list').innerHTML = '';
+    setWifiStatus('Checking WiFi status...', '');
+
+    try {
+        const hostname = state.deviceIp;
+        const status = await window.installer.invoke('wifi_get_status', { hostname });
+        wifiManager.isUsbConnection = status.isUsbConnection;
+
+        if (!status.isUsbConnection) {
+            document.getElementById('wifi-warning').style.display = '';
+        }
+
+        if (!status.wifiEnabled) {
+            document.getElementById('wifi-network-view').style.display = 'none';
+            document.getElementById('wifi-disabled-view').style.display = '';
+            setWifiStatus('WiFi is disabled', 'disconnected');
+            return;
+        }
+
+        if (status.connectedService) {
+            setWifiStatus(`Connected to ${status.connectedService.name}`, 'connected');
+        } else {
+            setWifiStatus('Not connected', 'disconnected');
+        }
+
+        wifiDoScan();
+    } catch (err) {
+        setWifiStatus(`Error: ${err.message}`, 'error');
+    }
+}
+
+function closeWifiManager() {
+    wifiManager.open = false;
+    wifiManager.passwordTarget = null;
+    document.getElementById('wifi-modal').style.display = 'none';
+}
+
+function setWifiStatus(text, cssClass) {
+    const dot = document.getElementById('wifi-status-dot');
+    const textEl = document.getElementById('wifi-status-text');
+    dot.className = 'wifi-status-dot' + (cssClass ? ' ' + cssClass : '');
+    textEl.textContent = text;
+}
+
+async function wifiDoScan() {
+    const scanBtn = document.getElementById('wifi-scan-btn');
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning...';
+    document.getElementById('wifi-status').textContent = 'Scanning for networks...';
+
+    try {
+        const hostname = state.deviceIp;
+        const networks = await window.installer.invoke('wifi_scan', { hostname });
+        wifiManager.networks = networks;
+        showWifiNetworkList(networks);
+        document.getElementById('wifi-status').textContent = `Found ${networks.length} network(s)`;
+        // Update status bar based on connected network
+        const connected = networks.find(n => n.connected);
+        if (connected) {
+            setWifiStatus(`Connected to ${connected.name}`, 'connected');
+        } else {
+            setWifiStatus('Not connected', 'disconnected');
+        }
+    } catch (err) {
+        document.getElementById('wifi-status').textContent = `Scan failed: ${err.message}`;
+        setWifiStatus('Error', 'error');
+    } finally {
+        scanBtn.disabled = false;
+        scanBtn.textContent = 'Scan for Networks';
+    }
+}
+
+function showWifiNetworkList(networks) {
+    const list = document.getElementById('wifi-network-list');
+    // Sort: connected first, then saved, then alphabetical
+    const sorted = [...networks].sort((a, b) => {
+        if (a.connected !== b.connected) return a.connected ? -1 : 1;
+        if (a.saved !== b.saved) return a.saved ? -1 : 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    list.innerHTML = sorted.map(n => {
+        const icon = n.connected ? '&#10003;' : (n.security !== 'open' ? '&#128274;' : '&#8226;');
+        const details = [];
+        if (n.connected) details.push('Connected');
+        else if (n.saved) details.push('Saved');
+        if (n.security !== 'open') details.push(n.security);
+        else details.push('Open');
+
+        let actions = '';
+        if (n.connected) {
+            actions = `<button data-action="disconnect" data-service="${n.serviceId}">Disconnect</button>`;
+        } else if (n.security === 'Enterprise') {
+            actions = `<span style="color: #666; font-size: 0.75rem;">Enterprise</span>`;
+        } else if (n.name === '(Hidden Network)') {
+            actions = `<span style="color: #666; font-size: 0.75rem;">Hidden</span>`;
+        } else {
+            actions = `<button data-action="connect" data-service="${n.serviceId}" data-name="${n.name}" data-security="${n.security}" data-saved="${n.saved}">Connect</button>`;
+        }
+        if (n.saved && !n.connected) {
+            actions += `<button data-action="forget" data-service="${n.serviceId}" data-name="${n.name}">Forget</button>`;
+        }
+
+        return `<div class="wifi-network-entry${n.connected ? ' connected' : ''}">
+            <div class="wifi-network-icon">${icon}</div>
+            <div class="wifi-network-info">
+                <div class="wifi-network-name">${n.name}</div>
+                <div class="wifi-network-detail">${details.join(' \u00b7 ')}</div>
+            </div>
+            <div class="wifi-network-actions">${actions}</div>
+        </div>`;
+    }).join('');
+
+    // Attach event listeners
+    list.querySelectorAll('button[data-action]').forEach(btn => {
+        btn.onclick = () => {
+            const action = btn.dataset.action;
+            const serviceId = btn.dataset.service;
+            const name = btn.dataset.name;
+            const security = btn.dataset.security;
+            const saved = btn.dataset.saved === 'true';
+            if (action === 'connect') {
+                wifiConnectToNetwork({ serviceId, name, security, saved });
+            } else if (action === 'disconnect') {
+                wifiDisconnect({ serviceId, name });
+            } else if (action === 'forget') {
+                wifiForgetNetwork({ serviceId, name });
+            }
+        };
+    });
+}
+
+function wifiConnectToNetwork(network) {
+    if (!wifiManager.isUsbConnection) {
+        if (!confirm('You appear to be connected via WiFi. Changing networks may disconnect this session. Continue?')) {
+            return;
+        }
+    }
+    // If secured and not saved, show password form
+    if (network.security !== 'open' && !network.saved) {
+        wifiManager.passwordTarget = network;
+        document.getElementById('wifi-password-network-name').textContent = network.name;
+        document.getElementById('wifi-password-input').value = '';
+        document.getElementById('wifi-network-view').style.display = 'none';
+        document.getElementById('wifi-password-view').style.display = '';
+        setTimeout(() => document.getElementById('wifi-password-input').focus(), 100);
+        return;
+    }
+    wifiDoConnect(network.serviceId, null, network.name);
+}
+
+async function wifiDoConnect(serviceId, passphrase, name) {
+    document.getElementById('wifi-status').textContent = `Connecting to ${name}...`;
+    try {
+        const hostname = state.deviceIp;
+        await window.installer.invoke('wifi_connect', { hostname, serviceId, passphrase });
+        document.getElementById('wifi-status').textContent = `Connected to ${name}`;
+        setWifiStatus(`Connected to ${name}`, 'connected');
+    } catch (err) {
+        document.getElementById('wifi-status').textContent = `Connection failed: ${err.message}`;
+        setWifiStatus('Connection failed', 'error');
+    }
+    // Refresh list after delay (SSH may have dropped and reconnected)
+    setTimeout(async () => {
+        try {
+            const hostname = state.deviceIp;
+            const networks = await window.installer.invoke('wifi_list_services', { hostname });
+            wifiManager.networks = networks;
+            showWifiNetworkList(networks);
+            const connected = networks.find(n => n.connected);
+            if (connected) {
+                setWifiStatus(`Connected to ${connected.name}`, 'connected');
+            }
+        } catch (err) {
+            document.getElementById('wifi-status').textContent = 'Could not refresh — SSH session may have dropped. Close and reopen WiFi to retry.';
+        }
+    }, 2000);
+}
+
+function wifiPasswordSubmit() {
+    const passphrase = document.getElementById('wifi-password-input').value;
+    if (!passphrase) return;
+    const target = wifiManager.passwordTarget;
+    wifiManager.passwordTarget = null;
+    document.getElementById('wifi-password-view').style.display = 'none';
+    document.getElementById('wifi-network-view').style.display = '';
+    wifiDoConnect(target.serviceId, passphrase, target.name);
+}
+
+function wifiPasswordCancel() {
+    wifiManager.passwordTarget = null;
+    document.getElementById('wifi-password-view').style.display = 'none';
+    document.getElementById('wifi-network-view').style.display = '';
+}
+
+async function wifiDisconnect(network) {
+    if (!wifiManager.isUsbConnection) {
+        if (!confirm('You appear to be connected via WiFi. Disconnecting may drop this session. Continue?')) {
+            return;
+        }
+    }
+    document.getElementById('wifi-status').textContent = `Disconnecting from ${network.name || 'network'}...`;
+    try {
+        const hostname = state.deviceIp;
+        await window.installer.invoke('wifi_disconnect', { hostname, serviceId: network.serviceId });
+        document.getElementById('wifi-status').textContent = 'Disconnected';
+        setWifiStatus('Not connected', 'disconnected');
+    } catch (err) {
+        document.getElementById('wifi-status').textContent = `Disconnect failed: ${err.message}`;
+    }
+    setTimeout(async () => {
+        try {
+            const hostname = state.deviceIp;
+            const networks = await window.installer.invoke('wifi_list_services', { hostname });
+            wifiManager.networks = networks;
+            showWifiNetworkList(networks);
+        } catch {}
+    }, 1500);
+}
+
+async function wifiForgetNetwork(network) {
+    if (!confirm(`Forget "${network.name}"? You will need to re-enter the password to connect again.`)) return;
+    document.getElementById('wifi-status').textContent = `Removing ${network.name}...`;
+    try {
+        const hostname = state.deviceIp;
+        await window.installer.invoke('wifi_remove_service', { hostname, serviceId: network.serviceId });
+        document.getElementById('wifi-status').textContent = `Removed ${network.name}`;
+    } catch (err) {
+        document.getElementById('wifi-status').textContent = `Remove failed: ${err.message}`;
+    }
+    try {
+        const hostname = state.deviceIp;
+        const networks = await window.installer.invoke('wifi_list_services', { hostname });
+        wifiManager.networks = networks;
+        showWifiNetworkList(networks);
+    } catch {}
+}
+
+async function wifiEnableRadio() {
+    const btn = document.getElementById('wifi-enable-btn');
+    btn.disabled = true;
+    btn.textContent = 'Enabling...';
+    try {
+        const hostname = state.deviceIp;
+        await window.installer.invoke('wifi_enable_radio', { hostname });
+        document.getElementById('wifi-disabled-view').style.display = 'none';
+        document.getElementById('wifi-network-view').style.display = '';
+        setWifiStatus('WiFi enabled', 'disconnected');
+        wifiDoScan();
+    } catch (err) {
+        document.getElementById('wifi-status').textContent = `Failed to enable WiFi: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Enable WiFi';
+    }
+}
+
 // Event Listeners
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('[DEBUG] DOM loaded, installer API available:', !!window.installer);
@@ -2637,7 +2914,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Close modal on Escape key
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && assetBrowser.open) closeAssetBrowser();
+        if (e.key === 'Escape') {
+            if (wifiManager.open) closeWifiManager();
+            else if (assetBrowser.open) closeAssetBrowser();
+        }
+    });
+
+    // WiFi manager events
+    document.getElementById('link-wifi').onclick = (e) => {
+        e.preventDefault();
+        openWifiManager();
+    };
+    document.getElementById('wifi-modal-close').onclick = closeWifiManager;
+    document.getElementById('wifi-scan-btn').onclick = wifiDoScan;
+    document.getElementById('wifi-enable-btn').onclick = wifiEnableRadio;
+    document.getElementById('wifi-password-connect').onclick = wifiPasswordSubmit;
+    document.getElementById('wifi-password-cancel').onclick = wifiPasswordCancel;
+    document.getElementById('wifi-modal').onclick = (e) => {
+        if (e.target.id === 'wifi-modal') closeWifiManager();
+    };
+    document.getElementById('wifi-password-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') wifiPasswordSubmit();
     });
 
     // Drag-and-drop on asset browser dropzone

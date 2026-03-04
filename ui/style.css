@@ -1315,3 +1315,180 @@ button.secondary:hover {
 .btn-reenable:hover {
     background: #e0aa44;
 }
+
+/* WiFi Manager Modal */
+.wifi-modal-content {
+    max-width: 480px;
+}
+
+.wifi-warning {
+    background: #3a2a00;
+    border-bottom: 1px solid #665500;
+    color: #ffcc44;
+    padding: 0.6rem 1.25rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.wifi-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.25rem;
+    border-bottom: 1px solid #333;
+    font-size: 0.85rem;
+    color: #aaa;
+}
+
+.wifi-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #666;
+    flex-shrink: 0;
+}
+
+.wifi-status-dot.connected {
+    background: #44aa44;
+}
+
+.wifi-status-dot.disconnected {
+    background: #666;
+}
+
+.wifi-status-dot.error {
+    background: #cc4444;
+}
+
+.wifi-toolbar {
+    padding: 0.5rem 1.25rem;
+}
+
+.wifi-disabled-message {
+    text-align: center;
+    padding: 2rem 1.25rem;
+    color: #aaa;
+}
+
+.wifi-disabled-message p {
+    margin-bottom: 1rem;
+}
+
+.wifi-network-list {
+    overflow-y: auto;
+    max-height: 350px;
+    margin: 0 1.25rem;
+}
+
+.wifi-network-entry {
+    display: flex;
+    align-items: center;
+    padding: 0.6rem 0.5rem;
+    border-bottom: 1px solid #2a2a2a;
+    gap: 0.5rem;
+}
+
+.wifi-network-entry:last-child {
+    border-bottom: none;
+}
+
+.wifi-network-entry:hover {
+    background: #252525;
+}
+
+.wifi-network-icon {
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+.wifi-network-entry.connected .wifi-network-icon {
+    color: #44aa44;
+}
+
+.wifi-network-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.wifi-network-name {
+    color: #ccc;
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wifi-network-entry.connected .wifi-network-name {
+    color: #44cc44;
+}
+
+.wifi-network-detail {
+    color: #666;
+    font-size: 0.75rem;
+    margin-top: 1px;
+}
+
+.wifi-network-actions {
+    display: flex;
+    gap: 0.3rem;
+    flex-shrink: 0;
+}
+
+.wifi-network-actions button {
+    background: none;
+    border: 1px solid #444;
+    color: #aaa;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    width: auto;
+    margin: 0;
+}
+
+.wifi-network-actions button:hover {
+    border-color: #666;
+    color: #fff;
+    background: #333;
+}
+
+.wifi-password-form {
+    padding: 1.25rem;
+}
+
+.wifi-password-form p {
+    margin-bottom: 0.75rem;
+    color: #ccc;
+    font-size: 0.9rem;
+}
+
+.wifi-password-form input {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.wifi-password-form input:focus {
+    outline: none;
+    border-color: #0066cc;
+}
+
+.wifi-password-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.wifi-password-actions button {
+    width: auto;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+}
