@@ -259,7 +259,7 @@
                 <div id="wifi-warning" class="wifi-warning" style="display: none;">
                     You appear to be connected via WiFi. Changing networks will disconnect this session.
                 </div>
-                <div id="wifi-status-bar" class="wifi-status-bar">
+                <div id="wifi-status-bar" class="wifi-status-bar" aria-live="polite">
                     <span id="wifi-status-dot" class="wifi-status-dot"></span>
                     <span id="wifi-status-text">Checking...</span>
                 </div>
@@ -277,7 +277,7 @@
                 </div>
                 <div id="wifi-password-view" style="display: none;">
                     <div class="wifi-password-form">
-                        <p id="wifi-password-label">Enter password for <strong id="wifi-password-network-name"></strong></p>
+                        <label id="wifi-password-label" for="wifi-password-input">Enter password for <strong id="wifi-password-network-name"></strong></label>
                         <input type="password" id="wifi-password-input" placeholder="WiFi password" autocomplete="off" />
                         <div class="wifi-password-actions">
                             <button id="wifi-password-cancel" class="secondary">Cancel</button>
@@ -285,7 +285,7 @@
                         </div>
                     </div>
                 </div>
-                <div id="wifi-status" class="asset-status"></div>
+                <div id="wifi-status" class="asset-status" aria-live="polite"></div>
             </div>
         </div>
     </div>
