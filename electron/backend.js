@@ -2526,7 +2526,7 @@ function parseServiceLine(line) {
         name: name || '(Hidden Network)',
         serviceId,
         security,
-        connected: isReady,
+        connected: isReady || isOnline,
         saved: isSaved,
         online: isOnline,
         ready: isReady
@@ -2548,6 +2548,12 @@ function extractSsidFromServiceId(serviceId) {
         return Buffer.from(hexSsid, 'hex').toString('utf8');
     } catch {
         return hexSsid;
+    }
+}
+
+function validateServiceId(serviceId) {
+    if (!serviceId || !/^wifi_[a-z0-9_]+$/.test(serviceId)) {
+        throw new Error(`Invalid service ID: ${serviceId}`);
     }
 }
 
@@ -2602,6 +2608,7 @@ async function wifiListServices(hostname) {
 }
 
 async function wifiConnect(hostname, serviceId, passphrase) {
+    validateServiceId(serviceId);
     const hostIp = cachedDeviceIp || hostname;
     // Connman on the Move stores service data in /data/settings/connman/lib/connman/
     const connmanDataDir = '/data/settings/connman/lib/connman';
@@ -2614,12 +2621,15 @@ async function wifiConnect(hostname, serviceId, passphrase) {
 
         // Write a connman service settings file directly — same format as saved networks
         const settingsDir = `${connmanDataDir}/${serviceId}`;
-        const settingsContent = `[${serviceId}]\\nName=${ssid}\\nSSID=${hexSsid}\\nFavorite=true\\nAutoConnect=true\\nPassphrase=${passphrase.replace(/\\/g, '\\\\').replace(/'/g, "'\\''")}\\nIPv4.method=dhcp\\nIPv6.method=auto\\nIPv6.privacy=disabled\\n`;
+        const settingsContent = `[${serviceId}]\nName=${ssid}\nSSID=${hexSsid}\nFavorite=true\nAutoConnect=true\nPassphrase=${passphrase}\nIPv4.method=dhcp\nIPv6.method=auto\nIPv6.privacy=disabled\n`;
+
+        // Base64-encode the content to avoid any shell injection via passphrase
+        const settingsB64 = Buffer.from(settingsContent).toString('base64');
 
         console.log('[WIFI] Writing service settings for:', ssid);
         try {
             await sshExec(hostIp, `mkdir -p ${settingsDir}`, { username: 'root' });
-            await sshExec(hostIp, `printf '${settingsContent}' > ${settingsDir}/settings`, { username: 'root' });
+            await sshExec(hostIp, `echo '${settingsB64}' | base64 -d > ${settingsDir}/settings`, { username: 'root' });
         } catch (err) {
             throw new Error(`Failed to write WiFi settings: ${err.message}`);
         }
@@ -2654,6 +2664,7 @@ async function wifiConnect(hostname, serviceId, passphrase) {
 }
 
 async function wifiDisconnect(hostname, serviceId) {
+    validateServiceId(serviceId);
     const hostIp = cachedDeviceIp || hostname;
     try {
         await sshExec(hostIp, `nohup connmanctl disconnect ${serviceId} > /dev/null 2>&1 &`);
@@ -2668,12 +2679,15 @@ async function wifiDisconnect(hostname, serviceId) {
 }
 
 async function wifiRemoveService(hostname, serviceId) {
+    validateServiceId(serviceId);
     const hostIp = cachedDeviceIp || hostname;
     await sshExec(hostIp, `connmanctl config ${serviceId} --remove`);
     // Also remove the service settings directory
     try {
         await sshExec(hostIp, `rm -rf /data/settings/connman/lib/connman/${serviceId}`, { username: 'root' });
-    } catch {}
+    } catch (err) {
+        console.log('[WIFI] Error removing service directory:', err.message);
+    }
 }
 
 async function wifiEnableRadio(hostname) {
