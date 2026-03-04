@@ -2623,13 +2623,14 @@ async function wifiConnect(hostname, serviceId, passphrase) {
         const settingsDir = `${connmanDataDir}/${serviceId}`;
         const settingsContent = `[${serviceId}]\nName=${ssid}\nSSID=${hexSsid}\nFavorite=true\nAutoConnect=true\nPassphrase=${passphrase}\nIPv4.method=dhcp\nIPv6.method=auto\nIPv6.privacy=disabled\n`;
 
-        // Base64-encode the content to avoid any shell injection via passphrase
-        const settingsB64 = Buffer.from(settingsContent).toString('base64');
+        // Hex-encode the content so the shell command contains only safe [0-9a-f\\x] chars,
+        // preventing any shell injection via passphrase (the device may lack base64)
+        const settingsHex = Array.from(Buffer.from(settingsContent)).map(b => '\\x' + b.toString(16).padStart(2, '0')).join('');
 
         console.log('[WIFI] Writing service settings for:', ssid);
         try {
             await sshExec(hostIp, `mkdir -p ${settingsDir}`, { username: 'root' });
-            await sshExec(hostIp, `echo '${settingsB64}' | base64 -d > ${settingsDir}/settings`, { username: 'root' });
+            await sshExec(hostIp, `printf '${settingsHex}' > ${settingsDir}/settings`, { username: 'root' });
         } catch (err) {
             throw new Error(`Failed to write WiFi settings: ${err.message}`);
         }
