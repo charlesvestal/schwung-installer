@@ -2292,6 +2292,12 @@ async function wifiDoScan() {
     }
 }
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 function showWifiNetworkList(networks) {
     const list = document.getElementById('wifi-network-list');
     // Sort: connected first, then saved, then alphabetical
@@ -2302,31 +2308,33 @@ function showWifiNetworkList(networks) {
     });
 
     list.innerHTML = sorted.map(n => {
+        const safeName = escapeHtml(n.name);
+        const safeServiceId = escapeHtml(n.serviceId);
         const icon = n.connected ? '&#10003;' : (n.security !== 'open' ? '&#128274;' : '&#8226;');
         const details = [];
         if (n.connected) details.push('Connected');
         else if (n.saved) details.push('Saved');
-        if (n.security !== 'open') details.push(n.security);
+        if (n.security !== 'open') details.push(escapeHtml(n.security));
         else details.push('Open');
 
         let actions = '';
         if (n.connected) {
-            actions = `<button data-action="disconnect" data-service="${n.serviceId}">Disconnect</button>`;
+            actions = `<button data-action="disconnect" data-service="${safeServiceId}">Disconnect</button>`;
         } else if (n.security === 'Enterprise') {
             actions = `<span style="color: #666; font-size: 0.75rem;">Enterprise</span>`;
         } else if (n.name === '(Hidden Network)') {
             actions = `<span style="color: #666; font-size: 0.75rem;">Hidden</span>`;
         } else {
-            actions = `<button data-action="connect" data-service="${n.serviceId}" data-name="${n.name}" data-security="${n.security}" data-saved="${n.saved}">Connect</button>`;
+            actions = `<button data-action="connect" data-service="${safeServiceId}" data-name="${safeName}" data-security="${escapeHtml(n.security)}" data-saved="${n.saved}">Connect</button>`;
         }
         if (n.saved && !n.connected) {
-            actions += `<button data-action="forget" data-service="${n.serviceId}" data-name="${n.name}">Forget</button>`;
+            actions += `<button data-action="forget" data-service="${safeServiceId}" data-name="${safeName}">Forget</button>`;
         }
 
         return `<div class="wifi-network-entry${n.connected ? ' connected' : ''}">
             <div class="wifi-network-icon">${icon}</div>
             <div class="wifi-network-info">
-                <div class="wifi-network-name">${n.name}</div>
+                <div class="wifi-network-name">${safeName}</div>
                 <div class="wifi-network-detail">${details.join(' \u00b7 ')}</div>
             </div>
             <div class="wifi-network-actions">${actions}</div>
@@ -2436,7 +2444,9 @@ async function wifiDisconnect(network) {
             const networks = await window.installer.invoke('wifi_list_services', { hostname });
             wifiManager.networks = networks;
             showWifiNetworkList(networks);
-        } catch {}
+        } catch (err) {
+            console.log('[WIFI] Failed to refresh after disconnect:', err.message);
+        }
     }, 1500);
 }
 
@@ -2455,7 +2465,9 @@ async function wifiForgetNetwork(network) {
         const networks = await window.installer.invoke('wifi_list_services', { hostname });
         wifiManager.networks = networks;
         showWifiNetworkList(networks);
-    } catch {}
+    } catch (err) {
+        console.log('[WIFI] Failed to refresh after forget:', err.message);
+    }
 }
 
 async function wifiEnableRadio() {
