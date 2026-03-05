@@ -877,7 +877,17 @@ async function getLatestRelease() {
         console.log('[DEBUG] GitHub API response status:', response.status);
 
         if (response.status === 200 && Array.isArray(response.data)) {
-            const binaryRelease = response.data.find(r => /^v\d/.test(r.tag_name));
+            // Find the highest-versioned binary release (API order is unreliable after tag rewrites)
+            const binaryReleases = response.data.filter(r => /^v\d/.test(r.tag_name));
+            binaryReleases.sort((a, b) => {
+                const va = a.tag_name.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+                const vb = b.tag_name.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+                for (let i = 0; i < Math.max(va.length, vb.length); i++) {
+                    if ((vb[i] || 0) !== (va[i] || 0)) return (vb[i] || 0) - (va[i] || 0);
+                }
+                return 0;
+            });
+            const binaryRelease = binaryReleases[0];
             if (binaryRelease) {
                 const tagName = binaryRelease.tag_name;
                 const version = tagName.startsWith('v') ? tagName.substring(1) : tagName;
