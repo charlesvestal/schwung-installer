@@ -2205,6 +2205,12 @@ async function fixPermissions(hostname) {
         // Use root to fix any files that may have been created with wrong ownership
         await sshExec(hostIp, 'chown -R ableton:users /data/UserData/move-anything/', { username: 'root' });
 
+        // Fix ownership of UserLibrary paths created by root-running DSP plugins
+        // (recordings, samples, track presets). Without this, tools like Wave Edit
+        // can't cp/mv files written by the setuid shim.
+        await sshExec(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Samples/Move Everything' 2>/dev/null || true", { username: 'root' });
+        await sshExec(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Track Presets/Move Everything' 2>/dev/null || true", { username: 'root' });
+
         // Ensure shim has setuid bit (critical for LD_PRELOAD to work)
         await sshExec(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
 
