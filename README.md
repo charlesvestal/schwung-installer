@@ -1,6 +1,6 @@
 # Move Everything Installer
 
-Desktop app for installing [Move Everything](https://github.com/charlesvestal/move-anything) on your Ableton Move.
+Desktop app for installing [Move Everything](https://github.com/charlesvestal/move-everything) on your Ableton Move.
 
 ## Requirements
 
