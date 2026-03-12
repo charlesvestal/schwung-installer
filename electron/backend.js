@@ -831,8 +831,9 @@ async function getModuleCatalog() {
 
             try {
                 console.log(`[DEBUG] Fetching module.json for: ${module.id}`);
+                const branch = module.default_branch || 'main';
                 const mjResponse = await httpClient.get(
-                    `https://raw.githubusercontent.com/${module.github_repo}/main/src/module.json`
+                    `https://raw.githubusercontent.com/${module.github_repo}/${branch}/src/module.json`
                 );
                 if (mjResponse.status === 200) {
                     const mj = typeof mjResponse.data === 'string' ? JSON.parse(mjResponse.data) : mjResponse.data;
@@ -892,7 +893,7 @@ async function getLatestRelease() {
                 const tagName = binaryRelease.tag_name;
                 const version = tagName.startsWith('v') ? tagName.substring(1) : tagName;
                 const assetName = 'move-anything.tar.gz';
-                const downloadUrl = `https://github.com/charlesvestal/move-anything/releases/download/${tagName}/${assetName}`;
+                const downloadUrl = `https://github.com/charlesvestal/move-everything/releases/download/${tagName}/${assetName}`;
 
                 console.log('[DEBUG] Found binary release:', tagName, 'version:', version);
 
@@ -909,7 +910,7 @@ async function getLatestRelease() {
         console.error('[DEBUG] Failed to get version from API:', err.message);
         // Fallback: try /releases/latest which may or may not be correct
         const assetName = 'move-anything.tar.gz';
-        const downloadUrl = `https://github.com/charlesvestal/move-anything/releases/latest/download/${assetName}`;
+        const downloadUrl = `https://github.com/charlesvestal/move-everything/releases/latest/download/${assetName}`;
         return {
             version: 'latest',
             asset_name: assetName,

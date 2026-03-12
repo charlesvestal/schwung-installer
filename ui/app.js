@@ -2033,7 +2033,7 @@ function populateSuccessScreen(options = {}) {
     }
 
     html += '</ul>';
-    html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/move-anything/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
+    html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/move-everything/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
     container.innerHTML = html;
     container.style.display = '';
 }
