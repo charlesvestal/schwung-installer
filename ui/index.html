@@ -41,6 +41,7 @@
             <div id="device-list"></div>
             <div class="manual-entry" style="display: none;">
                 <p>Can't find your device? Enter IP address:</p>
+				<label for="manual-ip">Move IP Address:</label>
                 <input type="text" id="manual-ip" placeholder="e.g., 192.168.1.100">
                 <button id="btn-manual-connect">Connect</button>
             </div>
@@ -52,11 +53,17 @@
             <h1>Enter Authorization Code</h1>
             <p class="instruction">Check your Ableton Move display for a 6-digit code</p>
             <div class="code-input">
+				<label for="code-digit-1">Digit 1</label>
                 <input type="text" id="code-digit-1" maxlength="1" class="code-digit">
+				<label for="code-digit-2">Digit 2</label>
                 <input type="text" id="code-digit-2" maxlength="1" class="code-digit">
+				<label for="code-digit-3">Digit 3</label>
                 <input type="text" id="code-digit-3" maxlength="1" class="code-digit">
+				<label for="code-digit-4">Digit 4</label>
                 <input type="text" id="code-digit-4" maxlength="1" class="code-digit">
+				<label for="code-digit-5">Digit 5</label>
                 <input type="text" id="code-digit-5" maxlength="1" class="code-digit">
+				<label for="code-digit-6">Digit 6</label>
                 <input type="text" id="code-digit-6" maxlength="1" class="code-digit">
             </div>
             <button id="btn-submit-code" disabled>Continue</button>
@@ -79,7 +86,7 @@
 
         <!-- Confirm on Device Screen -->
         <div id="screen-confirm" class="screen">
-            <h1>Confirm on Device</h1>
+            <h1>Approve key installation on Device</h1>
             <div class="spinner"></div>
             <p class="instruction">On your Ableton Move, use the jog wheel to select "Yes" and press to confirm</p>
             <p class="instruction" style="font-size: 0.9rem; margin-top: 1rem;">Waiting for confirmation...</p>
