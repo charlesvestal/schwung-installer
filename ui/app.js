@@ -377,6 +377,11 @@ async function startConfirmationPolling() {
     console.log('[DEBUG] Starting confirmation polling...');
     showScreen('confirm');
 
+    const MAX_POLLS = 30;
+    let pollCount = 0;
+    const statusEl = document.querySelector('#screen-confirm .instruction:last-of-type');
+    const startTime = Date.now();
+
     confirmationPollInterval = setInterval(async () => {
         try {
             // Stop if we've navigated away from the confirm screen
@@ -385,7 +390,14 @@ async function startConfirmationPolling() {
                 confirmationPollInterval = null;
                 return;
             }
-            console.log('[DEBUG] Polling SSH connection...');
+
+            pollCount++;
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
+            if (statusEl) {
+                statusEl.textContent = `Waiting for confirmation... (${elapsed}s)`;
+            }
+
+            console.log(`[DEBUG] Polling SSH connection (${pollCount}/${MAX_POLLS})...`);
             const connected = await window.installer.invoke('test_ssh', {
                 hostname: state.deviceIp
             });
@@ -396,6 +408,15 @@ async function startConfirmationPolling() {
                 confirmationPollInterval = null;
                 console.log('[DEBUG] SSH confirmed, checking versions...');
                 await checkVersions();
+                return;
+            }
+
+            // Timeout after MAX_POLLS attempts
+            if (pollCount >= MAX_POLLS) {
+                clearInterval(confirmationPollInterval);
+                confirmationPollInterval = null;
+                console.log('[DEBUG] SSH confirmation polling timed out');
+                showConfirmationTimeout();
             }
         } catch (error) {
             console.error('Polling error:', error);
@@ -409,6 +430,55 @@ function cancelConfirmation() {
         confirmationPollInterval = null;
     }
     showScreen('warning');
+}
+
+function showConfirmationTimeout() {
+    const screen = document.getElementById('screen-confirm');
+    const spinner = screen.querySelector('.spinner');
+    if (spinner) spinner.style.display = 'none';
+
+    const heading = screen.querySelector('h1');
+    if (heading) heading.textContent = 'Connection Failed';
+
+    const instructions = screen.querySelectorAll('.instruction');
+    if (instructions[0]) {
+        instructions[0].textContent = 'Could not establish SSH connection after 60 seconds.';
+    }
+    if (instructions[1]) {
+        instructions[1].innerHTML = 'Make sure you confirmed "Yes" on your Move device, then try again.';
+    }
+
+    // Replace cancel button with retry + cancel + export logs
+    const cancelBtn = document.getElementById('btn-cancel-confirm');
+    if (cancelBtn) {
+        const parent = cancelBtn.parentNode;
+
+        const retryBtn = document.createElement('button');
+        retryBtn.textContent = 'Retry';
+        retryBtn.onclick = () => {
+            // Restore original UI state
+            if (spinner) spinner.style.display = '';
+            if (heading) heading.textContent = 'Confirm on Device';
+            if (instructions[0]) instructions[0].textContent = 'On your Ableton Move, use the jog wheel to select "Yes" and press to confirm';
+            if (instructions[1]) instructions[1].textContent = 'Waiting for confirmation...';
+            // Remove extra buttons
+            const extraBtns = parent.querySelectorAll('.timeout-btn');
+            extraBtns.forEach(b => b.remove());
+            cancelBtn.style.display = '';
+            // Restart polling
+            startConfirmationPolling();
+        };
+        retryBtn.className = 'timeout-btn';
+        parent.insertBefore(retryBtn, cancelBtn);
+
+        const exportBtn = document.createElement('button');
+        exportBtn.textContent = 'Export Debug Logs';
+        exportBtn.className = 'secondary timeout-btn';
+        exportBtn.onclick = exportLogs;
+        parent.insertBefore(exportBtn, cancelBtn);
+
+        cancelBtn.style.display = 'none';
+    }
 }
 
 function cancelDiscovery() {
