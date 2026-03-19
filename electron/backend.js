@@ -1972,29 +1972,25 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
             console.log('[DEBUG] Could not read core version:', err.message);
         }
 
-        // Find all installed modules
+        // Find all installed modules (single SSH command reads all module.json files at once)
         const modules = [];
         try {
             if (progressCallback) progressCallback('Finding installed modules...');
 
-            // Find all module.json files in modules subdirectories
-            const findOutput = await sshExecWithRetry(hostIp,
-                'find /data/UserData/move-anything/modules -name module.json -type f 2>/dev/null || echo ""'
+            // Find all module.json files and cat them in one shot, separated by a delimiter
+            // This replaces 65+ sequential SSH commands with a single one
+            // Uses -exec directly (no shell variables) to avoid quoting issues with sshExec
+            const DELIM = '___MODULE_BOUNDARY___';
+            const batchOutput = await sshExecWithRetry(hostIp,
+                'find /data/UserData/move-anything/modules -name module.json -type f -exec cat {} \\; -exec echo ___MODULE_BOUNDARY___ \\;'
             );
 
-            const moduleFiles = findOutput.trim().split('\n').filter(line => line);
-            console.log(`[DEBUG] Found ${moduleFiles.length} module.json files`);
+            const chunks = batchOutput.split(DELIM).map(c => c.trim()).filter(c => c);
+            console.log(`[DEBUG] Found ${chunks.length} module.json files`);
 
-            // Read each module.json
-            for (let i = 0; i < moduleFiles.length; i++) {
-                const moduleFile = moduleFiles[i];
+            for (const chunk of chunks) {
                 try {
-                    if (progressCallback) {
-                        progressCallback(`Checking module ${i + 1} of ${moduleFiles.length}...`);
-                    }
-
-                    const jsonContent = await sshExecWithRetry(hostIp, `cat "${moduleFile}"`);
-                    const moduleInfo = JSON.parse(jsonContent);
+                    const moduleInfo = JSON.parse(chunk);
 
                     if (moduleInfo.id && moduleInfo.version) {
                         const moduleData = {
@@ -2013,9 +2009,11 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
                         console.log(`[DEBUG] Found module: ${moduleInfo.id} v${moduleInfo.version}`);
                     }
                 } catch (err) {
-                    console.log(`[DEBUG] Error reading ${moduleFile}:`, err.message);
+                    console.log(`[DEBUG] Error parsing module.json chunk:`, err.message);
                 }
             }
+
+            if (progressCallback) progressCallback(`Found ${modules.length} modules`);
         } catch (err) {
             console.log('[DEBUG] Error finding modules:', err.message);
         }
