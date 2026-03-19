@@ -165,7 +165,10 @@
 
             <!-- Management mode: Available (not installed) modules with install buttons -->
             <div id="available-modules" style="display: none;">
-                <h3>Available Modules</h3>
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <h3>Available Modules</h3>
+                    <button id="btn-install-all" class="btn-action" style="display: none;">Install All</button>
+                </div>
                 <div id="available-module-list"></div>
             </div>
 

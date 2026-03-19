@@ -134,6 +134,13 @@ ipcMain.handle('install_module_package', async (event, { moduleId, tarballPath, 
     return await backend.installModulePackage(moduleId, tarballPath, componentType, hostname);
 });
 
+ipcMain.handle('install_module_batch', async (event, { modules, hostname }) => {
+    const progressCallback = (progress) => {
+        event.sender.send('batch-install-progress', progress);
+    };
+    return await backend.installModuleBatch(modules, hostname, progressCallback);
+});
+
 ipcMain.handle('remove_module', async (event, { moduleId, componentType, hostname }) => {
     return await backend.removeModulePackage(moduleId, componentType, hostname);
 });

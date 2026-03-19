@@ -1085,6 +1085,14 @@ function displayManagementModules() {
         availableDiv.style.display = 'block';
         availableList.innerHTML = '';
 
+        // Show "Install All" button when there are multiple available modules
+        const installAllBtn = document.getElementById('btn-install-all');
+        if (installAllBtn && versionInfo.newModules.length > 1) {
+            installAllBtn.style.display = '';
+            installAllBtn.textContent = `Install All (${versionInfo.newModules.length})`;
+            installAllBtn.onclick = () => handleInstallAll();
+        }
+
         versionInfo.newModules.sort((a, b) => a.name.localeCompare(b.name));
 
         versionInfo.newModules.forEach(module => {
@@ -1316,6 +1324,113 @@ async function handleUpgradeAll() {
     } catch (error) {
         state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
         showError('Upgrade failed: ' + error);
+    }
+}
+
+async function handleInstallAll() {
+    const versionInfo = state.versionInfo;
+    const newModules = versionInfo.newModules || [];
+
+    if (newModules.length === 0) return;
+
+    if (!confirm(`Install all ${newModules.length} available modules?`)) return;
+
+    showScreen('installing');
+    try {
+        // Build checklist
+        const checklist = document.getElementById('install-checklist');
+        checklist.innerHTML = newModules.map(module => `
+            <div class="checklist-item" data-item-id="${module.id}">
+                <div class="checklist-icon pending">\u25CB</div>
+                <div class="checklist-item-text">${module.name}</div>
+            </div>
+        `).join('');
+
+        updateInstallProgress('Setting up SSH configuration...', 0);
+        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
+
+        // Fix permissions before batch install
+        updateInstallProgress('Fixing file permissions...', 2);
+        await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
+
+        // Listen for batch progress events
+        const progressHandler = (progress) => {
+            const { phase, current, total, message } = progress;
+            let pct = 5;
+            if (phase === 'download') {
+                pct = 5 + (current / total) * 30; // 5-35%
+            } else if (phase === 'upload') {
+                pct = 35 + (current / total) * 45; // 35-80%
+                // Mark downloaded modules as in-progress during upload
+                if (current > 0) {
+                    const mod = newModules[current - 1];
+                    if (mod) updateChecklistItem(mod.id, 'in-progress');
+                }
+            } else if (phase === 'install') {
+                pct = 80 + (current / total) * 20; // 80-100%
+                // Mark all as completed when install finishes
+                if (current === total) {
+                    newModules.forEach(m => updateChecklistItem(m.id, 'completed'));
+                }
+            }
+            updateInstallProgress(message, pct);
+        };
+
+        window.installer.on('batch-install-progress', progressHandler);
+
+        // Prepare module data for batch install
+        const modulesForBatch = newModules.map(m => ({
+            id: m.id,
+            name: m.name,
+            download_url: m.download_url,
+            asset_name: m.asset_name,
+            component_type: m.component_type
+        }));
+
+        // Mark all as in-progress during download phase
+        newModules.forEach(m => updateChecklistItem(m.id, 'in-progress'));
+
+        const results = await window.installer.invoke('install_module_batch', {
+            modules: modulesForBatch,
+            hostname: state.deviceIp
+        });
+
+        window.installer.removeAllListeners('batch-install-progress');
+
+        // Update state with results
+        for (const installed of results.installed) {
+            const module = newModules.find(m => m.id === installed.id);
+            if (module) {
+                updateChecklistItem(installed.id, 'completed');
+                versionInfo.newModules = versionInfo.newModules.filter(m => m.id !== installed.id);
+                module.currentVersion = module.version || 'installed';
+                versionInfo.upToDateModules.push(module);
+                state.installedModules.push({
+                    id: module.id,
+                    name: module.name,
+                    version: module.version,
+                    component_type: module.component_type
+                });
+            }
+        }
+
+        for (const failed of results.failed) {
+            updateChecklistItem(failed.id, 'failed');
+        }
+
+        const msg = results.failed.length > 0
+            ? `Installed ${results.installed.length} modules (${results.failed.length} failed)`
+            : `All ${results.installed.length} modules installed!`;
+        updateInstallProgress(msg, 100);
+
+        setTimeout(() => {
+            populateSuccessScreen({ isUpgrade: false, installAllResults: results });
+            showScreen('success');
+        }, 1000);
+    } catch (error) {
+        window.installer.removeAllListeners('batch-install-progress');
+        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
+        showError('Install All failed: ' + error);
     }
 }
 

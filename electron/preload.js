@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('installer', {
 
     // Event listeners
     on: (channel, callback) => {
-        const validChannels = ['version-check-progress', 'backend-log'];
+        const validChannels = ['version-check-progress', 'backend-log', 'batch-install-progress'];
         if (validChannels.includes(channel)) {
             ipcRenderer.on(channel, (event, ...args) => callback(...args));
         }

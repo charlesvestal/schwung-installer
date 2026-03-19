@@ -1606,6 +1606,120 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
     }
 }
 
+async function installModuleBatch(modules, hostname, progressCallback = null) {
+    const hostIp = cachedDeviceIp || hostname;
+    const results = { installed: [], failed: [] };
+
+    if (progressCallback) progressCallback({ phase: 'download', current: 0, total: modules.length, message: 'Starting downloads...' });
+
+    // Phase 1: Download all tarballs in parallel (no device involvement)
+    const PARALLEL_DOWNLOADS = 6;
+    const downloadResults = [];
+
+    for (let i = 0; i < modules.length; i += PARALLEL_DOWNLOADS) {
+        const batch = modules.slice(i, i + PARALLEL_DOWNLOADS);
+        const batchResults = await Promise.allSettled(
+            batch.map(async (module) => {
+                const destPath = path.join(os.tmpdir(), module.asset_name);
+                console.log(`[DEBUG] Downloading ${module.id}...`);
+                await downloadRelease(module.download_url, destPath);
+                return { module, localPath: destPath };
+            })
+        );
+
+        for (const result of batchResults) {
+            if (result.status === 'fulfilled') {
+                downloadResults.push(result.value);
+            } else {
+                const failedModule = batch[batchResults.indexOf(result)];
+                console.log(`[DEBUG] Download failed for ${failedModule.id}: ${result.reason.message}`);
+                results.failed.push({ id: failedModule.id, name: failedModule.name, error: result.reason.message });
+            }
+        }
+
+        if (progressCallback) {
+            const done = Math.min(i + PARALLEL_DOWNLOADS, modules.length);
+            progressCallback({ phase: 'download', current: done, total: modules.length, message: `Downloaded ${done} of ${modules.length} modules...` });
+        }
+    }
+
+    if (downloadResults.length === 0) {
+        throw new Error('All downloads failed');
+    }
+
+    // Phase 2: Upload all tarballs via SFTP (sequential — single device connection)
+    if (progressCallback) progressCallback({ phase: 'upload', current: 0, total: downloadResults.length, message: 'Uploading to device...' });
+
+    const uploaded = [];
+    for (let i = 0; i < downloadResults.length; i++) {
+        const { module, localPath } = downloadResults[i];
+        const filename = path.basename(localPath);
+        const remotePath = `/data/UserData/move-anything/${filename}`;
+
+        try {
+            console.log(`[DEBUG] Uploading ${module.id} to device...`);
+            await sftpUpload(hostIp, localPath, remotePath);
+            uploaded.push({ module, filename });
+
+            if (progressCallback) {
+                progressCallback({ phase: 'upload', current: i + 1, total: downloadResults.length, message: `Uploaded ${module.name} (${i + 1}/${downloadResults.length})...` });
+            }
+        } catch (err) {
+            console.log(`[DEBUG] Upload failed for ${module.id}: ${err.message}`);
+            results.failed.push({ id: module.id, name: module.name, error: err.message });
+        }
+    }
+
+    // Phase 3: Extract all tarballs in a single SSH command
+    if (uploaded.length > 0) {
+        if (progressCallback) progressCallback({ phase: 'install', current: 0, total: uploaded.length, message: 'Installing modules on device...' });
+
+        // Build a single extract command for all uploaded tarballs
+        const extractCmds = uploaded.map(({ module, filename }) => {
+            const categoryPath = getInstallSubdir(module.component_type);
+            return `mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`;
+        });
+
+        try {
+            const fullCmd = `cd /data/UserData/move-anything && ${extractCmds.join(' && ')}`;
+            await sshExecWithRetry(hostIp, fullCmd);
+
+            // Fix ownership in one shot
+            await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+
+            for (const { module } of uploaded) {
+                console.log(`[DEBUG] Module ${module.id} installed successfully`);
+                results.installed.push({ id: module.id, name: module.name });
+            }
+        } catch (err) {
+            console.log(`[DEBUG] Batch extract failed: ${err.message}, falling back to individual extracts`);
+            // Fallback: extract one at a time so partial success is possible
+            for (const { module, filename } of uploaded) {
+                try {
+                    const categoryPath = getInstallSubdir(module.component_type);
+                    await sshExecWithRetry(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
+                    results.installed.push({ id: module.id, name: module.name });
+                } catch (extractErr) {
+                    results.failed.push({ id: module.id, name: module.name, error: extractErr.message });
+                }
+            }
+            // Fix ownership regardless
+            try {
+                await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+            } catch {}
+        }
+
+        if (progressCallback) progressCallback({ phase: 'install', current: uploaded.length, total: uploaded.length, message: 'Installation complete!' });
+    }
+
+    // Clean up local temp files
+    for (const { localPath } of downloadResults) {
+        try { fs.unlinkSync(localPath); } catch {}
+    }
+
+    return results;
+}
+
 async function cleanDeviceTmp(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
@@ -2816,6 +2930,7 @@ module.exports = {
     downloadRelease,
     installMain,
     installModulePackage,
+    installModuleBatch,
     removeModulePackage,
     uploadModuleAssets,
     listRemoteDir,
