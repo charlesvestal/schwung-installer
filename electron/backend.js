@@ -1958,10 +1958,13 @@ async function reenableMoveEverything(hostname) {
         // Clean stale ld.so.preload entries
         await sshExecWithRetry(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'move-anything-shim.so' /etc/ld.so.preload; then grep -v 'move-anything-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
 
-        // Symlink shim to /usr/lib/ + setuid
-        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so && ln -s /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
-        const setuidCheck = await sshExecWithRetry(hostIp, 'test -u /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
+        // Copy shim to /usr/lib/ + setuid
+        // NOTE: must be a real copy, not a symlink — glibc 2.35+ follows symlinks under
+        // AT_SECURE (triggered by MoveOriginal's file capabilities) and rejects libraries
+        // whose real path is on an untrusted filesystem like /data/UserData/
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so && cp /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod u+s /usr/lib/move-anything-shim.so', { username: 'root' });
+        const setuidCheck = await sshExecWithRetry(hostIp, 'test -u /usr/lib/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
         if (setuidCheck.trim() !== 'ok') {
             throw new Error('Shim setuid bit missing after chmod');
         }
