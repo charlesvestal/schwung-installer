@@ -2040,7 +2040,7 @@ async function reenableMoveEverything(hostname) {
         for (let i = 0; i < 30; i++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             try {
-                const check = await sshExecWithRetry(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "move-anything-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
+                const check = await sshExec(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "move-anything-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
                 if (check.trim() === 'ok') {
                     shimOk = true;
                     break;
