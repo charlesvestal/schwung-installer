@@ -377,6 +377,11 @@ async function startConfirmationPolling() {
     console.log('[DEBUG] Starting confirmation polling...');
     showScreen('confirm');
 
+    const MAX_POLLS = 30;
+    let pollCount = 0;
+    const statusEl = document.querySelector('#screen-confirm .instruction:last-of-type');
+    const startTime = Date.now();
+
     confirmationPollInterval = setInterval(async () => {
         try {
             // Stop if we've navigated away from the confirm screen
@@ -385,7 +390,14 @@ async function startConfirmationPolling() {
                 confirmationPollInterval = null;
                 return;
             }
-            console.log('[DEBUG] Polling SSH connection...');
+
+            pollCount++;
+            const elapsed = Math.round((Date.now() - startTime) / 1000);
+            if (statusEl) {
+                statusEl.textContent = `Waiting for confirmation... (${elapsed}s)`;
+            }
+
+            console.log(`[DEBUG] Polling SSH connection (${pollCount}/${MAX_POLLS})...`);
             const connected = await window.installer.invoke('test_ssh', {
                 hostname: state.deviceIp
             });
@@ -396,6 +408,15 @@ async function startConfirmationPolling() {
                 confirmationPollInterval = null;
                 console.log('[DEBUG] SSH confirmed, checking versions...');
                 await checkVersions();
+                return;
+            }
+
+            // Timeout after MAX_POLLS attempts
+            if (pollCount >= MAX_POLLS) {
+                clearInterval(confirmationPollInterval);
+                confirmationPollInterval = null;
+                console.log('[DEBUG] SSH confirmation polling timed out');
+                showConfirmationTimeout();
             }
         } catch (error) {
             console.error('Polling error:', error);
@@ -409,6 +430,55 @@ function cancelConfirmation() {
         confirmationPollInterval = null;
     }
     showScreen('warning');
+}
+
+function showConfirmationTimeout() {
+    const screen = document.getElementById('screen-confirm');
+    const spinner = screen.querySelector('.spinner');
+    if (spinner) spinner.style.display = 'none';
+
+    const heading = screen.querySelector('h1');
+    if (heading) heading.textContent = 'Connection Failed';
+
+    const instructions = screen.querySelectorAll('.instruction');
+    if (instructions[0]) {
+        instructions[0].textContent = 'Could not establish SSH connection after 60 seconds.';
+    }
+    if (instructions[1]) {
+        instructions[1].innerHTML = 'Make sure you confirmed "Yes" on your Move device, then try again.';
+    }
+
+    // Replace cancel button with retry + cancel + export logs
+    const cancelBtn = document.getElementById('btn-cancel-confirm');
+    if (cancelBtn) {
+        const parent = cancelBtn.parentNode;
+
+        const retryBtn = document.createElement('button');
+        retryBtn.textContent = 'Retry';
+        retryBtn.onclick = () => {
+            // Restore original UI state
+            if (spinner) spinner.style.display = '';
+            if (heading) heading.textContent = 'Confirm on Device';
+            if (instructions[0]) instructions[0].textContent = 'On your Ableton Move, use the jog wheel to select "Yes" and press to confirm';
+            if (instructions[1]) instructions[1].textContent = 'Waiting for confirmation...';
+            // Remove extra buttons
+            const extraBtns = parent.querySelectorAll('.timeout-btn');
+            extraBtns.forEach(b => b.remove());
+            cancelBtn.style.display = '';
+            // Restart polling
+            startConfirmationPolling();
+        };
+        retryBtn.className = 'timeout-btn';
+        parent.insertBefore(retryBtn, cancelBtn);
+
+        const exportBtn = document.createElement('button');
+        exportBtn.textContent = 'Export Debug Logs';
+        exportBtn.className = 'secondary timeout-btn';
+        exportBtn.onclick = exportLogs;
+        parent.insertBefore(exportBtn, cancelBtn);
+
+        cancelBtn.style.display = 'none';
+    }
 }
 
 function cancelDiscovery() {
@@ -1015,6 +1085,14 @@ function displayManagementModules() {
         availableDiv.style.display = 'block';
         availableList.innerHTML = '';
 
+        // Show "Install All" button when there are multiple available modules
+        const installAllBtn = document.getElementById('btn-install-all');
+        if (installAllBtn && versionInfo.newModules.length > 1) {
+            installAllBtn.style.display = '';
+            installAllBtn.textContent = `Install All (${versionInfo.newModules.length})`;
+            installAllBtn.onclick = () => handleInstallAll();
+        }
+
         versionInfo.newModules.sort((a, b) => a.name.localeCompare(b.name));
 
         versionInfo.newModules.forEach(module => {
@@ -1246,6 +1324,113 @@ async function handleUpgradeAll() {
     } catch (error) {
         state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
         showError('Upgrade failed: ' + error);
+    }
+}
+
+async function handleInstallAll() {
+    const versionInfo = state.versionInfo;
+    const newModules = versionInfo.newModules || [];
+
+    if (newModules.length === 0) return;
+
+    if (!confirm(`Install all ${newModules.length} available modules?`)) return;
+
+    showScreen('installing');
+    try {
+        // Build checklist
+        const checklist = document.getElementById('install-checklist');
+        checklist.innerHTML = newModules.map(module => `
+            <div class="checklist-item" data-item-id="${module.id}">
+                <div class="checklist-icon pending">\u25CB</div>
+                <div class="checklist-item-text">${module.name}</div>
+            </div>
+        `).join('');
+
+        updateInstallProgress('Setting up SSH configuration...', 0);
+        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
+
+        // Fix permissions before batch install
+        updateInstallProgress('Fixing file permissions...', 2);
+        await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
+
+        // Listen for batch progress events
+        const progressHandler = (progress) => {
+            const { phase, current, total, message } = progress;
+            let pct = 5;
+            if (phase === 'download') {
+                pct = 5 + (current / total) * 30; // 5-35%
+            } else if (phase === 'upload') {
+                pct = 35 + (current / total) * 45; // 35-80%
+                // Mark downloaded modules as in-progress during upload
+                if (current > 0) {
+                    const mod = newModules[current - 1];
+                    if (mod) updateChecklistItem(mod.id, 'in-progress');
+                }
+            } else if (phase === 'install') {
+                pct = 80 + (current / total) * 20; // 80-100%
+                // Mark all as completed when install finishes
+                if (current === total) {
+                    newModules.forEach(m => updateChecklistItem(m.id, 'completed'));
+                }
+            }
+            updateInstallProgress(message, pct);
+        };
+
+        window.installer.on('batch-install-progress', progressHandler);
+
+        // Prepare module data for batch install
+        const modulesForBatch = newModules.map(m => ({
+            id: m.id,
+            name: m.name,
+            download_url: m.download_url,
+            asset_name: m.asset_name,
+            component_type: m.component_type
+        }));
+
+        // Mark all as in-progress during download phase
+        newModules.forEach(m => updateChecklistItem(m.id, 'in-progress'));
+
+        const results = await window.installer.invoke('install_module_batch', {
+            modules: modulesForBatch,
+            hostname: state.deviceIp
+        });
+
+        window.installer.removeAllListeners('batch-install-progress');
+
+        // Update state with results
+        for (const installed of results.installed) {
+            const module = newModules.find(m => m.id === installed.id);
+            if (module) {
+                updateChecklistItem(installed.id, 'completed');
+                versionInfo.newModules = versionInfo.newModules.filter(m => m.id !== installed.id);
+                module.currentVersion = module.version || 'installed';
+                versionInfo.upToDateModules.push(module);
+                state.installedModules.push({
+                    id: module.id,
+                    name: module.name,
+                    version: module.version,
+                    component_type: module.component_type
+                });
+            }
+        }
+
+        for (const failed of results.failed) {
+            updateChecklistItem(failed.id, 'failed');
+        }
+
+        const msg = results.failed.length > 0
+            ? `Installed ${results.installed.length} modules (${results.failed.length} failed)`
+            : `All ${results.installed.length} modules installed!`;
+        updateInstallProgress(msg, 100);
+
+        setTimeout(() => {
+            populateSuccessScreen({ isUpgrade: false, installAllResults: results });
+            showScreen('success');
+        }, 1000);
+    } catch (error) {
+        window.installer.removeAllListeners('batch-install-progress');
+        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
+        showError('Install All failed: ' + error);
     }
 }
 

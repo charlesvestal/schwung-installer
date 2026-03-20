@@ -370,9 +370,21 @@ function isKeyEncrypted(privateKeyPath) {
     try {
         if (!fs.existsSync(privateKeyPath)) return false;
         const content = fs.readFileSync(privateKeyPath, 'utf8');
-        // Detects both old-style PEM encryption (DEK-Info/Proc-Type: ENCRYPTED)
-        // and new OpenSSH format encryption (bcrypt/aes256-ctr in openssh-key-v1)
-        return content.includes('ENCRYPTED');
+        // Old-style PEM encryption (DEK-Info/Proc-Type: ENCRYPTED)
+        if (content.includes('ENCRYPTED')) return true;
+        // New OpenSSH format: header is "-----BEGIN OPENSSH PRIVATE KEY-----"
+        // Decode the base64 body and check for non-"none" cipher/kdf
+        // Unencrypted keys use cipher="none" kdf="none"
+        // Encrypted keys use cipher="aes256-ctr" kdf="bcrypt" (or similar)
+        if (content.includes('BEGIN OPENSSH PRIVATE KEY')) {
+            const b64 = content.replace(/-----[A-Z ]+-----/g, '').replace(/\s/g, '');
+            try {
+                const buf = Buffer.from(b64, 'base64');
+                const str = buf.toString('utf8', 0, Math.min(buf.length, 200));
+                if (str.includes('bcrypt') || str.includes('aes256')) return true;
+            } catch {}
+        }
+        return false;
     } catch (err) {
         console.log(`[DEBUG] Could not read key ${privateKeyPath}: ${err.message}`);
         return false;
@@ -382,25 +394,21 @@ function isKeyEncrypted(privateKeyPath) {
 // Get the usable (non-encrypted) private key path, or null if none available
 function getUsablePrivateKeyPath() {
     const sshDir = path.join(os.homedir(), '.ssh');
-    const moveKeyPath = path.join(sshDir, 'move_key');
-    const rsaKeyPath = path.join(sshDir, 'id_rsa');
+    const candidates = [
+        { name: 'move_key', path: path.join(sshDir, 'move_key'), regenerateOnEncrypted: true },
+        { name: 'id_ed25519', path: path.join(sshDir, 'id_ed25519'), regenerateOnEncrypted: false },
+        { name: 'id_rsa', path: path.join(sshDir, 'id_rsa'), regenerateOnEncrypted: false },
+    ];
 
-    // Check move_key first
-    if (fs.existsSync(moveKeyPath)) {
-        if (isKeyEncrypted(moveKeyPath)) {
-            console.log('[DEBUG] move_key is passphrase-protected, will regenerate');
-            return null; // Caller should regenerate
+    for (const key of candidates) {
+        if (fs.existsSync(key.path)) {
+            if (isKeyEncrypted(key.path)) {
+                console.log(`[DEBUG] ${key.name} is passphrase-protected, skipping`);
+                if (key.regenerateOnEncrypted) return null;
+                continue;
+            }
+            return key.path;
         }
-        return moveKeyPath;
-    }
-
-    // Fall back to id_rsa, but skip if encrypted
-    if (fs.existsSync(rsaKeyPath)) {
-        if (isKeyEncrypted(rsaKeyPath)) {
-            console.log('[DEBUG] id_rsa is passphrase-protected, skipping');
-            return null;
-        }
-        return rsaKeyPath;
     }
 
     return null;
@@ -409,30 +417,28 @@ function getUsablePrivateKeyPath() {
 function findExistingSshKey() {
     const sshDir = path.join(os.homedir(), '.ssh');
 
-    // Prefer move_key.pub (ED25519) over id_rsa.pub, but skip encrypted private keys
-    const moveKeyPubPath = path.join(sshDir, 'move_key.pub');
-    const moveKeyPath = path.join(sshDir, 'move_key');
-    if (fs.existsSync(moveKeyPubPath)) {
-        if (isKeyEncrypted(moveKeyPath)) {
-            console.log('[DEBUG] Found move_key.pub but private key is encrypted, will regenerate');
-            // Delete the encrypted move_key so generateNewSshKey will recreate it
-            try { fs.unlinkSync(moveKeyPath); } catch (e) {}
-            try { fs.unlinkSync(moveKeyPubPath); } catch (e) {}
-            return null;
-        }
-        console.log('[DEBUG] Found move_key.pub');
-        return moveKeyPubPath;
-    }
+    // Check keys in preference order: move_key > id_ed25519 > id_rsa
+    // Skip keys whose private key is passphrase-protected
+    const candidates = [
+        { name: 'move_key', pubPath: path.join(sshDir, 'move_key.pub'), privPath: path.join(sshDir, 'move_key'), deleteOnEncrypted: true },
+        { name: 'id_ed25519', pubPath: path.join(sshDir, 'id_ed25519.pub'), privPath: path.join(sshDir, 'id_ed25519'), deleteOnEncrypted: false },
+        { name: 'id_rsa', pubPath: path.join(sshDir, 'id_rsa.pub'), privPath: path.join(sshDir, 'id_rsa'), deleteOnEncrypted: false },
+    ];
 
-    const rsaKeyPubPath = path.join(sshDir, 'id_rsa.pub');
-    const rsaKeyPath = path.join(sshDir, 'id_rsa');
-    if (fs.existsSync(rsaKeyPubPath)) {
-        if (isKeyEncrypted(rsaKeyPath)) {
-            console.log('[DEBUG] Found id_rsa.pub but private key is passphrase-protected, skipping');
-            return null;
+    for (const key of candidates) {
+        if (fs.existsSync(key.pubPath)) {
+            if (isKeyEncrypted(key.privPath)) {
+                console.log(`[DEBUG] Found ${key.name}.pub but private key is encrypted, skipping`);
+                if (key.deleteOnEncrypted) {
+                    try { fs.unlinkSync(key.privPath); } catch (e) {}
+                    try { fs.unlinkSync(key.pubPath); } catch (e) {}
+                    return null;
+                }
+                continue;
+            }
+            console.log(`[DEBUG] Found ${key.name}.pub`);
+            return key.pubPath;
         }
-        console.log('[DEBUG] Found id_rsa.pub');
-        return rsaKeyPubPath;
     }
 
     return null;
@@ -572,6 +578,19 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
     }
 }
 
+async function clearStaleHostKeys(hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    const targets = [hostIp, hostname, 'move.local', 'movedevice'];
+    const { exec } = require('child_process');
+    const execAsync = promisify(exec);
+    for (const target of targets) {
+        try {
+            await execAsync(`ssh-keygen -R "${target}" 2>/dev/null`, { timeout: 5000 });
+        } catch {}
+    }
+    console.log('[DEBUG] Cleared stale host keys for:', targets.join(', '));
+}
+
 async function testSsh(hostname) {
     try {
         // Use move_key if it exists, otherwise id_rsa (skip encrypted keys)
@@ -614,7 +633,7 @@ async function testSsh(hostname) {
             try {
                 console.log(`[DEBUG] Testing SSH as ableton@${hostIp} using native ssh`);
 
-                const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostIp} "echo test"`;
+                const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostIp} "echo test"`;
                 const { stdout } = await execAsync(sshCmd, { timeout: 8000 });
 
                 if (stdout.trim() === 'test') {
@@ -631,7 +650,46 @@ async function testSsh(hostname) {
                     return true;
                 }
             } catch (userErr) {
-                console.log(`[DEBUG] Native SSH failed for ableton:`, userErr.message);
+                const errOutput = (userErr.stderr || userErr.message || '').toString();
+                console.log(`[DEBUG] Native SSH failed for ableton:`, errOutput);
+
+                // Detect host key change and auto-recover
+                if (/REMOTE HOST IDENTIFICATION HAS CHANGED|host key verification failed/i.test(errOutput)) {
+                    console.log('[DEBUG] Host key changed, clearing stale keys and retrying...');
+                    await clearStaleHostKeys(hostname);
+
+                    // Retry once after clearing
+                    try {
+                        const retryCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostIp} "echo test"`;
+                        const { stdout: retryOut } = await execAsync(retryCmd, { timeout: 8000 });
+                        if (retryOut.trim() === 'test') {
+                            console.log('[DEBUG] SSH works after clearing stale host keys');
+                            return true;
+                        }
+                    } catch (retryErr) {
+                        console.log('[DEBUG] SSH retry after host key clear failed:', retryErr.message);
+                    }
+                }
+
+                // Detect permission denied and try root fallback
+                if (/permission denied/i.test(errOutput)) {
+                    console.log('[DEBUG] Permission denied for ableton, trying root fallback...');
+                    try {
+                        const rootCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes root@${hostIp} "chmod 644 /data/authorized_keys && echo fixed"`;
+                        const { stdout: rootOut } = await execAsync(rootCmd, { timeout: 8000 });
+                        if (rootOut.trim() === 'fixed') {
+                            console.log('[DEBUG] Fixed /data/authorized_keys permissions via root, retrying ableton...');
+                            const retryCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostIp} "echo test"`;
+                            const { stdout: retryOut } = await execAsync(retryCmd, { timeout: 8000 });
+                            if (retryOut.trim() === 'test') {
+                                console.log('[DEBUG] SSH works after permissions fix');
+                                return true;
+                            }
+                        }
+                    } catch (rootErr) {
+                        console.log('[DEBUG] Root fallback failed:', rootErr.message);
+                    }
+                }
             }
 
             console.log('[DEBUG] Native SSH failed, trying ssh2 library...');
@@ -1103,6 +1161,42 @@ async function sshExec(hostname, command, { username = 'ableton' } = {}) {
     }
 }
 
+async function sshExecWithRetry(hostname, command, options = {}) {
+    const { maxRetries = 3, delayMs = 2000, ...sshOptions } = options;
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await sshExec(hostname, command, sshOptions);
+        } catch (err) {
+            lastErr = err;
+            console.log(`[DEBUG] SSH attempt ${attempt}/${maxRetries} failed: ${err.message}`);
+            if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, delayMs));
+            }
+        }
+    }
+    throw lastErr;
+}
+
+async function execWithRetry(command, options = {}) {
+    const { maxRetries = 3, delayMs = 2000, ...execOptions } = options;
+    const { exec } = require('child_process');
+    const execAsync = promisify(exec);
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await execAsync(command, execOptions);
+        } catch (err) {
+            lastErr = err;
+            console.log(`[DEBUG] exec attempt ${attempt}/${maxRetries} failed: ${err.message}`);
+            if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, delayMs));
+            }
+        }
+    }
+    throw lastErr;
+}
+
 // Helper to upload file via SFTP
 async function sftpUpload(hostname, localPath, remotePath, { username = 'ableton' } = {}) {
     const hostIp = cachedDeviceIp || hostname;
@@ -1281,15 +1375,7 @@ async function installMain(tarballPath, hostname, flags = []) {
         const execAsync = promisify(exec);
 
         // Clear stale host keys for this device (e.g. after a reformat)
-        // install.sh uses StrictHostKeyChecking=accept-new which rejects changed keys
-        try {
-            await execAsync(`ssh-keygen -R ${hostIp} 2>/dev/null`, { timeout: 5000 });
-            await execAsync(`ssh-keygen -R ${hostname} 2>/dev/null`, { timeout: 5000 });
-            await execAsync(`ssh-keygen -R movedevice 2>/dev/null`, { timeout: 5000 });
-            console.log('[DEBUG] Cleared stale host keys');
-        } catch (err) {
-            // Non-fatal — keys may not exist
-        }
+        await clearStaleHostKeys(hostname);
 
         // Find bash - use /bin/bash directly on macOS/Linux, find Git Bash on Windows
         const bashPath = process.platform === 'win32' ? await findGitBash() : '/bin/bash';
@@ -1323,7 +1409,7 @@ async function installMain(tarballPath, hostname, flags = []) {
             if (process.platform === 'win32') {
                 console.log('[DEBUG] Pre-flight: testing Git Bash SSH to movedevice...');
                 try {
-                    await execAsync(`"${bashPath}" -c "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 movedevice echo ok"`, { timeout: 15000 });
+                    await execWithRetry(`"${bashPath}" -c "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 movedevice echo ok"`, { timeout: 15000 });
                     console.log('[DEBUG] Pre-flight: Git Bash SSH to movedevice OK');
                 } catch (sshTestErr) {
                     const errMsg = (sshTestErr.stderr || sshTestErr.message || '').trim();
@@ -1332,7 +1418,7 @@ async function installMain(tarballPath, hostname, flags = []) {
                     const keyPath = getUsablePrivateKeyPath();
                     const keyFlag = keyPath ? `-i "${keyPath.replace(/\\/g, '/')}"` : '';
                     try {
-                        await execAsync(`"${bashPath}" -c "ssh ${keyFlag} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 ableton@${hostIp} echo ok"`, { timeout: 15000 });
+                        await execWithRetry(`"${bashPath}" -c "ssh ${keyFlag} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 ableton@${hostIp} echo ok"`, { timeout: 15000 });
                         console.log('[DEBUG] Pre-flight: direct IP SSH works, SSH config alias may be broken - rebuilding...');
                         // SSH config alias is broken but direct connection works - rebuild config
                         await setupSshConfig(hostname);
@@ -1417,9 +1503,9 @@ async function installMain(tarballPath, hostname, flags = []) {
                     console.log('[DEBUG] Install succeeded but restart failed - attempting backend restart...');
                     try {
                         // Try to restart via backend SSH (has ssh2 fallback, more reliable on Windows)
-                        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+                        await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
                         await new Promise(r => setTimeout(r, 3000));
-                        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1 || true', { username: 'root' });
+                        await sshExecWithRetry(hostIp, '/etc/init.d/move start >/dev/null 2>&1 || true', { username: 'root' });
                         console.log('[DEBUG] Backend restart succeeded');
                     } catch (restartErr) {
                         console.log('[DEBUG] Backend restart also failed (device may need manual reboot):', restartErr.message);
@@ -1464,7 +1550,7 @@ async function fixPermissions(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
         console.log('[DEBUG] Fixing permissions: chown -R ableton:users /data/UserData/move-anything');
-        await sshExec(hostIp, 'chown -R ableton:users /data/UserData/move-anything', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything', { username: 'root' });
         console.log('[DEBUG] Permissions fixed');
         return true;
     } catch (err) {
@@ -1497,7 +1583,7 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
         // Ensure target directory is writable by ableton (may be root-owned from older installs)
         const categoryPath = getInstallSubdir(componentType);
         try {
-            await sshExec(hostIp, `chown -R ableton:users /data/UserData/move-anything/modules/${categoryPath}`, { username: 'root' });
+            await sshExecWithRetry(hostIp, `chown -R ableton:users /data/UserData/move-anything/modules/${categoryPath}`, { username: 'root' });
         } catch (chownErr) {
             console.log('[DEBUG] chown fix failed (non-fatal):', chownErr.message);
         }
@@ -1510,7 +1596,7 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
 
         // Extract and install module
         console.log(`[DEBUG] Extracting ${moduleId} to modules/${categoryPath}/`);
-        await sshExec(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
+        await sshExecWithRetry(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
         console.log(`[DEBUG] Module ${moduleId} installed successfully`);
 
         return true;
@@ -1518,6 +1604,120 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
         console.error(`[DEBUG] Module installation error for ${moduleId}:`, err.message);
         throw new Error(`Module installation failed: ${err.message}`);
     }
+}
+
+async function installModuleBatch(modules, hostname, progressCallback = null) {
+    const hostIp = cachedDeviceIp || hostname;
+    const results = { installed: [], failed: [] };
+
+    if (progressCallback) progressCallback({ phase: 'download', current: 0, total: modules.length, message: 'Starting downloads...' });
+
+    // Phase 1: Download all tarballs in parallel (no device involvement)
+    const PARALLEL_DOWNLOADS = 6;
+    const downloadResults = [];
+
+    for (let i = 0; i < modules.length; i += PARALLEL_DOWNLOADS) {
+        const batch = modules.slice(i, i + PARALLEL_DOWNLOADS);
+        const batchResults = await Promise.allSettled(
+            batch.map(async (module) => {
+                const destPath = path.join(os.tmpdir(), module.asset_name);
+                console.log(`[DEBUG] Downloading ${module.id}...`);
+                await downloadRelease(module.download_url, destPath);
+                return { module, localPath: destPath };
+            })
+        );
+
+        for (const result of batchResults) {
+            if (result.status === 'fulfilled') {
+                downloadResults.push(result.value);
+            } else {
+                const failedModule = batch[batchResults.indexOf(result)];
+                console.log(`[DEBUG] Download failed for ${failedModule.id}: ${result.reason.message}`);
+                results.failed.push({ id: failedModule.id, name: failedModule.name, error: result.reason.message });
+            }
+        }
+
+        if (progressCallback) {
+            const done = Math.min(i + PARALLEL_DOWNLOADS, modules.length);
+            progressCallback({ phase: 'download', current: done, total: modules.length, message: `Downloaded ${done} of ${modules.length} modules...` });
+        }
+    }
+
+    if (downloadResults.length === 0) {
+        throw new Error('All downloads failed');
+    }
+
+    // Phase 2: Upload all tarballs via SFTP (sequential — single device connection)
+    if (progressCallback) progressCallback({ phase: 'upload', current: 0, total: downloadResults.length, message: 'Uploading to device...' });
+
+    const uploaded = [];
+    for (let i = 0; i < downloadResults.length; i++) {
+        const { module, localPath } = downloadResults[i];
+        const filename = path.basename(localPath);
+        const remotePath = `/data/UserData/move-anything/${filename}`;
+
+        try {
+            console.log(`[DEBUG] Uploading ${module.id} to device...`);
+            await sftpUpload(hostIp, localPath, remotePath);
+            uploaded.push({ module, filename });
+
+            if (progressCallback) {
+                progressCallback({ phase: 'upload', current: i + 1, total: downloadResults.length, message: `Uploaded ${module.name} (${i + 1}/${downloadResults.length})...` });
+            }
+        } catch (err) {
+            console.log(`[DEBUG] Upload failed for ${module.id}: ${err.message}`);
+            results.failed.push({ id: module.id, name: module.name, error: err.message });
+        }
+    }
+
+    // Phase 3: Extract all tarballs in a single SSH command
+    if (uploaded.length > 0) {
+        if (progressCallback) progressCallback({ phase: 'install', current: 0, total: uploaded.length, message: 'Installing modules on device...' });
+
+        // Build a single extract command for all uploaded tarballs
+        const extractCmds = uploaded.map(({ module, filename }) => {
+            const categoryPath = getInstallSubdir(module.component_type);
+            return `mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`;
+        });
+
+        try {
+            const fullCmd = `cd /data/UserData/move-anything && ${extractCmds.join(' && ')}`;
+            await sshExecWithRetry(hostIp, fullCmd);
+
+            // Fix ownership in one shot
+            await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+
+            for (const { module } of uploaded) {
+                console.log(`[DEBUG] Module ${module.id} installed successfully`);
+                results.installed.push({ id: module.id, name: module.name });
+            }
+        } catch (err) {
+            console.log(`[DEBUG] Batch extract failed: ${err.message}, falling back to individual extracts`);
+            // Fallback: extract one at a time so partial success is possible
+            for (const { module, filename } of uploaded) {
+                try {
+                    const categoryPath = getInstallSubdir(module.component_type);
+                    await sshExecWithRetry(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
+                    results.installed.push({ id: module.id, name: module.name });
+                } catch (extractErr) {
+                    results.failed.push({ id: module.id, name: module.name, error: extractErr.message });
+                }
+            }
+            // Fix ownership regardless
+            try {
+                await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+            } catch {}
+        }
+
+        if (progressCallback) progressCallback({ phase: 'install', current: uploaded.length, total: uploaded.length, message: 'Installation complete!' });
+    }
+
+    // Clean up local temp files
+    for (const { localPath } of downloadResults) {
+        try { fs.unlinkSync(localPath); } catch {}
+    }
+
+    return results;
 }
 
 async function cleanDeviceTmp(hostname) {
@@ -1529,7 +1729,7 @@ async function cleanDeviceTmp(hostname) {
         // Get before size
         let beforeFree = '';
         try {
-            beforeFree = await sshExec(hostIp, "df / | tail -1 | awk '{print $4}'", asRoot);
+            beforeFree = await sshExecWithRetry(hostIp, "df / | tail -1 | awk '{print $4}'", asRoot);
         } catch (e) { /* ignore */ }
 
         // Remove log, json, and tarball files from /tmp (root partition)
@@ -1542,7 +1742,7 @@ async function cleanDeviceTmp(hostname) {
 
         for (const cmd of cleanupCmds) {
             try {
-                await sshExec(hostIp, cmd, asRoot);
+                await sshExecWithRetry(hostIp, cmd, asRoot);
             } catch (e) {
                 console.log('[DEBUG] Cleanup cmd failed (non-fatal):', cmd, e.message);
             }
@@ -1551,7 +1751,7 @@ async function cleanDeviceTmp(hostname) {
         // Get after size
         let afterFree = '';
         try {
-            afterFree = await sshExec(hostIp, "df / | tail -1 | awk '{print $4}'", asRoot);
+            afterFree = await sshExecWithRetry(hostIp, "df / | tail -1 | awk '{print $4}'", asRoot);
         } catch (e) { /* ignore */ }
 
         const freedKB = parseInt(afterFree) - parseInt(beforeFree);
@@ -1569,8 +1769,8 @@ async function listRemoteDir(hostname, remotePath) {
     try {
         const hostIp = cachedDeviceIp || hostname;
         // Ensure the directory exists
-        await sshExec(hostIp, `mkdir -p "${remotePath}"`);
-        const output = await sshExec(hostIp, `ls -lA "${remotePath}"`);
+        await sshExecWithRetry(hostIp, `mkdir -p "${remotePath}"`);
+        const output = await sshExecWithRetry(hostIp, `ls -lA "${remotePath}"`);
         const lines = output.trim().split('\n');
         const entries = [];
         const lineRegex = /^([d\-l])\S+\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\w+\s+\d+\s+[\d:]+\s+(.+)$/;
@@ -1603,7 +1803,7 @@ async function deleteRemotePath(hostname, remotePath) {
             throw new Error('Path must be within /data/UserData/move-anything/');
         }
         const hostIp = cachedDeviceIp || hostname;
-        await sshExec(hostIp, `rm -rf "${remotePath}"`);
+        await sshExecWithRetry(hostIp, `rm -rf "${remotePath}"`);
         return true;
     } catch (err) {
         console.error('[DEBUG] deleteRemotePath error:', err.message);
@@ -1618,7 +1818,7 @@ async function createRemoteDir(hostname, remotePath) {
             throw new Error('Path must be within /data/UserData/move-anything/');
         }
         const hostIp = cachedDeviceIp || hostname;
-        await sshExec(hostIp, `mkdir -p "${remotePath}"`);
+        await sshExecWithRetry(hostIp, `mkdir -p "${remotePath}"`);
         return true;
     } catch (err) {
         console.error('[DEBUG] createRemoteDir error:', err.message);
@@ -1632,7 +1832,7 @@ async function checkCoreInstallation(hostname) {
         console.log('[DEBUG] Checking if Move Everything is installed...');
 
         // Quick check: is Move Everything installed?
-        const installCheck = await sshExec(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
+        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
         if (installCheck.trim() === 'not_installed') {
             console.log('[DEBUG] Move Everything not installed');
             return { installed: false, core: null };
@@ -1641,7 +1841,7 @@ async function checkCoreInstallation(hostname) {
         // Get core version only
         let coreVersion = null;
         try {
-            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
@@ -1669,7 +1869,7 @@ async function checkShimActive(hostname) {
                 "if [ -z \"\\$pid\" ]; then echo \"no_process\"; " +
                 "elif grep -q \"move-anything-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
                 "else echo \"inactive\"; fi";
-            runtimeState = (await sshExec(hostIp, runtimeProbe, { username: 'root' })).trim();
+            runtimeState = (await sshExecWithRetry(hostIp, runtimeProbe, { username: 'root' })).trim();
             console.log('[DEBUG] Shim runtime probe:', runtimeState);
             if (runtimeState === 'active') {
                 return { active: true };
@@ -1691,13 +1891,13 @@ async function checkShimActive(hostname) {
         ].join(' ');
 
         // First try with ableton (should work in normal cases)
-        let magic = (await sshExec(hostIp, readMagicCommand)).trim();
+        let magic = (await sshExecWithRetry(hostIp, readMagicCommand)).trim();
         console.log('[DEBUG] /opt/move/Move magic probe (ableton):', magic);
 
         // Fallback to root if read is inconclusive with ableton
         if (magic === 'missing' || magic === 'empty' || magic === 'unreadable' || magic === 'read_error' || !magic) {
             try {
-                magic = (await sshExec(hostIp, readMagicCommand, { username: 'root' })).trim();
+                magic = (await sshExecWithRetry(hostIp, readMagicCommand, { username: 'root' })).trim();
                 console.log('[DEBUG] /opt/move/Move magic probe (root fallback):', magic);
             } catch (rootErr) {
                 console.log('[DEBUG] Root fallback probe failed:', rootErr.message);
@@ -1717,7 +1917,7 @@ async function checkShimActive(hostname) {
 
             let hasMoveOriginal = 'unknown';
             try {
-                hasMoveOriginal = (await sshExec(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' })).trim();
+                hasMoveOriginal = (await sshExecWithRetry(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' })).trim();
                 console.log('[DEBUG] /opt/move/MoveOriginal exists:', hasMoveOriginal);
             } catch (backupErr) {
                 console.log('[DEBUG] MoveOriginal check failed (non-fatal):', backupErr.message);
@@ -1746,61 +1946,64 @@ async function reenableMoveEverything(hostname) {
         console.log('[DEBUG] Re-enabling Move Everything (root partition operations only)...');
 
         // Verify data partition payload is intact
-        const shimCheck = await sshExec(hostIp, 'test -f /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "missing"');
+        const shimCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "missing"');
         if (shimCheck.trim() !== 'ok') {
             throw new Error('Shim not found on data partition. Run a full install instead.');
         }
-        const entrypointCheck = await sshExec(hostIp, 'test -f /data/UserData/move-anything/shim-entrypoint.sh && echo "ok" || echo "missing"');
+        const entrypointCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/shim-entrypoint.sh && echo "ok" || echo "missing"');
         if (entrypointCheck.trim() !== 'ok') {
             throw new Error('Entrypoint not found on data partition. Run a full install instead.');
         }
 
         // Clean stale ld.so.preload entries
-        await sshExec(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'move-anything-shim.so' /etc/ld.so.preload; then grep -v 'move-anything-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
+        await sshExecWithRetry(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'move-anything-shim.so' /etc/ld.so.preload; then grep -v 'move-anything-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
 
-        // Symlink shim to /usr/lib/ + setuid
-        await sshExec(hostIp, 'rm -f /usr/lib/move-anything-shim.so && ln -s /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
-        await sshExec(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
-        const setuidCheck = await sshExec(hostIp, 'test -u /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
+        // Copy shim to /usr/lib/ + setuid
+        // NOTE: must be a real copy, not a symlink — glibc 2.35+ follows symlinks under
+        // AT_SECURE (triggered by MoveOriginal's file capabilities) and rejects libraries
+        // whose real path is on an untrusted filesystem like /data/UserData/
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so && cp /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod u+s /usr/lib/move-anything-shim.so', { username: 'root' });
+        const setuidCheck = await sshExecWithRetry(hostIp, 'test -u /usr/lib/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
         if (setuidCheck.trim() !== 'ok') {
             throw new Error('Shim setuid bit missing after chmod');
         }
 
         // Web shim symlink if present
-        const hasWebShim = await sshExec(hostIp, 'test -f /data/UserData/move-anything/move-anything-web-shim.so && echo "yes" || echo "no"');
+        const hasWebShim = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/move-anything-web-shim.so && echo "yes" || echo "no"');
         if (hasWebShim.trim() === 'yes') {
-            await sshExec(hostIp, 'rm -f /usr/lib/move-anything-web-shim.so && ln -s /data/UserData/move-anything/move-anything-web-shim.so /usr/lib/move-anything-web-shim.so', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-web-shim.so && ln -s /data/UserData/move-anything/move-anything-web-shim.so /usr/lib/move-anything-web-shim.so', { username: 'root' });
         }
 
         // TTS library symlinks if present
-        const hasLib = await sshExec(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
+        const hasLib = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
         if (hasLib.trim() === 'yes') {
-            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/move-anything/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/move-anything/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
         }
 
         // Ensure entrypoint is executable
-        await sshExec(hostIp, 'chmod +x /data/UserData/move-anything/shim-entrypoint.sh', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/move-anything/shim-entrypoint.sh', { username: 'root' });
 
         // Backup original Move binary if MoveOriginal doesn't exist
-        const hasMoveOriginal = await sshExec(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' });
+        const hasMoveOriginal = await sshExecWithRetry(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' });
         if (hasMoveOriginal.trim() !== 'yes') {
-            await sshExec(hostIp, 'test -f /opt/move/Move && mv /opt/move/Move /opt/move/MoveOriginal', { username: 'root' });
-            try { await sshExec(hostIp, 'cp /opt/move/MoveOriginal ~/'); } catch (e) { /* non-fatal */ }
+            await sshExecWithRetry(hostIp, 'test -f /opt/move/Move && mv /opt/move/Move /opt/move/MoveOriginal', { username: 'root' });
+            try { await sshExecWithRetry(hostIp, 'cp /opt/move/MoveOriginal ~/'); } catch (e) { /* non-fatal */ }
         }
 
         // Install shimmed entrypoint
-        await sshExec(hostIp, 'cp /data/UserData/move-anything/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'cp /data/UserData/move-anything/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
 
         // MoveWebService wrapper if web shim present
         if (hasWebShim.trim() === 'yes') {
             try {
-                const webSvcPath = (await sshExec(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
+                const webSvcPath = (await sshExecWithRetry(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
                 if (webSvcPath) {
-                    const hasOriginal = await sshExec(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
+                    const hasOriginal = await sshExecWithRetry(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
                     if (hasOriginal.trim() !== 'yes') {
-                        await sshExec(hostIp, `mv ${webSvcPath} ${webSvcPath}Original`, { username: 'root' });
+                        await sshExecWithRetry(hostIp, `mv ${webSvcPath} ${webSvcPath}Original`, { username: 'root' });
                     }
-                    await sshExec(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/move-anything/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/move-anything-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
+                    await sshExecWithRetry(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/move-anything/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/move-anything-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
                 }
             } catch (err) {
                 console.log('[DEBUG] Web service wrapper setup failed (non-fatal):', err.message);
@@ -1809,20 +2012,20 @@ async function reenableMoveEverything(hostname) {
 
         // Stop and restart Move service
         console.log('[DEBUG] Restarting Move service...');
-        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
-        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExec(hostIp, 'pids=\\$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids || true; fi', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'pids=\\$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Restart MoveWebService if wrapped
         if (hasWebShim.trim() === 'yes') {
             try {
-                const webSvcPath = (await sshExec(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
+                const webSvcPath = (await sshExecWithRetry(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
                 if (webSvcPath) {
-                    const hasOriginal = await sshExec(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
+                    const hasOriginal = await sshExecWithRetry(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
                     if (hasOriginal.trim() === 'yes') {
-                        await sshExec(hostIp, 'killall MoveWebServiceOriginal MoveWebService 2>/dev/null; sleep 1; /etc/init.d/move-web-service start >/dev/null 2>&1 || true', { username: 'root' });
+                        await sshExecWithRetry(hostIp, 'killall MoveWebServiceOriginal MoveWebService 2>/dev/null; sleep 1; /etc/init.d/move-web-service start >/dev/null 2>&1 || true', { username: 'root' });
                     }
                 }
             } catch (err) {
@@ -1830,7 +2033,7 @@ async function reenableMoveEverything(hostname) {
             }
         }
 
-        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
 
         // Verify shim is loaded (wait up to 30 seconds)
         let shimOk = false;
@@ -1865,7 +2068,7 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
         console.log('[DEBUG] Checking installed versions on device...');
 
         // Check if Move Everything is installed
-        const installCheck = await sshExec(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
+        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
         if (installCheck.trim() === 'not_installed') {
             console.log('[DEBUG] Move Everything not installed on device');
             return {
@@ -1879,36 +2082,32 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
         let coreVersion = null;
         try {
             if (progressCallback) progressCallback('Checking core version...');
-            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
             console.log('[DEBUG] Could not read core version:', err.message);
         }
 
-        // Find all installed modules
+        // Find all installed modules (single SSH command reads all module.json files at once)
         const modules = [];
         try {
             if (progressCallback) progressCallback('Finding installed modules...');
 
-            // Find all module.json files in modules subdirectories
-            const findOutput = await sshExec(hostIp,
-                'find /data/UserData/move-anything/modules -name module.json -type f 2>/dev/null || echo ""'
+            // Find all module.json files and cat them in one shot, separated by a delimiter
+            // This replaces 65+ sequential SSH commands with a single one
+            // Uses -exec directly (no shell variables) to avoid quoting issues with sshExec
+            const DELIM = '___MODULE_BOUNDARY___';
+            const batchOutput = await sshExecWithRetry(hostIp,
+                'find /data/UserData/move-anything/modules -name module.json -type f -exec cat {} \\; -exec echo ___MODULE_BOUNDARY___ \\;'
             );
 
-            const moduleFiles = findOutput.trim().split('\n').filter(line => line);
-            console.log(`[DEBUG] Found ${moduleFiles.length} module.json files`);
+            const chunks = batchOutput.split(DELIM).map(c => c.trim()).filter(c => c);
+            console.log(`[DEBUG] Found ${chunks.length} module.json files`);
 
-            // Read each module.json
-            for (let i = 0; i < moduleFiles.length; i++) {
-                const moduleFile = moduleFiles[i];
+            for (const chunk of chunks) {
                 try {
-                    if (progressCallback) {
-                        progressCallback(`Checking module ${i + 1} of ${moduleFiles.length}...`);
-                    }
-
-                    const jsonContent = await sshExec(hostIp, `cat "${moduleFile}"`);
-                    const moduleInfo = JSON.parse(jsonContent);
+                    const moduleInfo = JSON.parse(chunk);
 
                     if (moduleInfo.id && moduleInfo.version) {
                         const moduleData = {
@@ -1927,9 +2126,11 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
                         console.log(`[DEBUG] Found module: ${moduleInfo.id} v${moduleInfo.version}`);
                     }
                 } catch (err) {
-                    console.log(`[DEBUG] Error reading ${moduleFile}:`, err.message);
+                    console.log(`[DEBUG] Error parsing module.json chunk:`, err.message);
                 }
             }
+
+            if (progressCallback) progressCallback(`Found ${modules.length} modules`);
         } catch (err) {
             console.log('[DEBUG] Error finding modules:', err.message);
         }
@@ -2027,7 +2228,7 @@ async function getScreenReaderStatus(hostname) {
 
         // Check for screen reader state file (used by tts_engine_flite.c)
         const checkCmd = 'cat /data/UserData/move-anything/config/screen_reader_state.txt 2>/dev/null || echo "0"';
-        const status = (await sshExec(hostIp, checkCmd)).trim();
+        const status = (await sshExecWithRetry(hostIp, checkCmd)).trim();
 
         return status === '1';
     } catch (err) {
@@ -2042,21 +2243,21 @@ async function setScreenReaderState(hostname, enabled) {
         console.log('[DEBUG] Setting screen reader to:', enabled);
 
         // Ensure config directory exists
-        await sshExec(hostIp, 'mkdir -p /data/UserData/move-anything/config');
+        await sshExecWithRetry(hostIp, 'mkdir -p /data/UserData/move-anything/config');
 
         // Write state file (1 = enabled, 0 = disabled)
         const value = enabled ? '1' : '0';
-        await sshExec(hostIp, `echo "${value}" > /data/UserData/move-anything/config/screen_reader_state.txt`);
+        await sshExecWithRetry(hostIp, `echo "${value}" > /data/UserData/move-anything/config/screen_reader_state.txt`);
 
         // Restart Move via init service so it picks up the new state
         // (matches the restart sequence in install.sh)
         console.log('[DEBUG] Restarting Move...');
-        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
-        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
-        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
 
         return {
             enabled: enabled,
@@ -2072,7 +2273,7 @@ async function getStandaloneStatus(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
 
-        const featuresRaw = (await sshExec(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
         const features = JSON.parse(featuresRaw);
         return features.standalone_enabled === true;
     } catch (err) {
@@ -2087,23 +2288,23 @@ async function setStandaloneState(hostname, enabled) {
         console.log('[DEBUG] Setting standalone to:', enabled);
 
         // Read existing features.json to preserve other settings
-        const featuresRaw = (await sshExec(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
         const features = JSON.parse(featuresRaw);
         features.standalone_enabled = enabled;
 
         // Write updated features.json
         const featuresJson = JSON.stringify(features, null, 2);
-        await sshExec(hostIp, `mkdir -p /data/UserData/move-anything/config`);
-        await sshExec(hostIp, `cat > /data/UserData/move-anything/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
+        await sshExecWithRetry(hostIp, `mkdir -p /data/UserData/move-anything/config`);
+        await sshExecWithRetry(hostIp, `cat > /data/UserData/move-anything/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
 
         // Restart Move via init service so it picks up the new state
         console.log('[DEBUG] Restarting Move...');
-        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
-        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
-        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
+        await sshExecWithRetry(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
 
         return {
             enabled: enabled,
@@ -2121,7 +2322,7 @@ async function uploadModuleAssets(localPaths, remoteDir, hostname) {
         console.log(`[DEBUG] Uploading ${localPaths.length} asset(s) to ${remoteDir}`);
 
         // Ensure remote directory exists
-        await sshExec(hostIp, `mkdir -p "${remoteDir}"`);
+        await sshExecWithRetry(hostIp, `mkdir -p "${remoteDir}"`);
 
         const results = [];
 
@@ -2138,7 +2339,7 @@ async function uploadModuleAssets(localPaths, remoteDir, hostname) {
                 } else {
                     const folderName = path.basename(localPath);
                     remoteSubdir = `${targetDir}/${folderName}`;
-                    await sshExec(hostIp, `mkdir -p "${remoteSubdir}"`);
+                    await sshExecWithRetry(hostIp, `mkdir -p "${remoteSubdir}"`);
                     console.log(`[DEBUG] Created remote dir ${remoteSubdir}`);
                 }
 
@@ -2182,12 +2383,12 @@ async function removeModulePackage(moduleId, componentType, hostname) {
         const modulePath = `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}`;
 
         // Verify the directory exists before removing
-        const checkResult = await sshExec(hostIp, `test -d "${modulePath}" && echo "exists" || echo "not_found"`);
+        const checkResult = await sshExecWithRetry(hostIp, `test -d "${modulePath}" && echo "exists" || echo "not_found"`);
         if (checkResult.trim() !== 'exists') {
             throw new Error(`Module directory not found: ${modulePath}`);
         }
 
-        await sshExec(hostIp, `rm -rf "${modulePath}"`);
+        await sshExecWithRetry(hostIp, `rm -rf "${modulePath}"`);
         console.log(`[DEBUG] Module ${moduleId} removed successfully`);
 
         return true;
@@ -2204,19 +2405,19 @@ async function fixPermissions(hostname) {
 
         // Ensure all files in move-anything are owned by ableton
         // Use root to fix any files that may have been created with wrong ownership
-        await sshExec(hostIp, 'chown -R ableton:users /data/UserData/move-anything/', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/', { username: 'root' });
 
         // Fix ownership of UserLibrary paths created by root-running DSP plugins
         // (recordings, samples, track presets). Without this, tools like Wave Edit
         // can't cp/mv files written by the setuid shim.
-        await sshExec(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Samples/Move Everything' 2>/dev/null || true", { username: 'root' });
-        await sshExec(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Track Presets/Move Everything' 2>/dev/null || true", { username: 'root' });
+        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Samples/Move Everything' 2>/dev/null || true", { username: 'root' });
+        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Track Presets/Move Everything' 2>/dev/null || true", { username: 'root' });
 
         // Ensure shim has setuid bit (critical for LD_PRELOAD to work)
-        await sshExec(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
 
         // Ensure executables are executable
-        await sshExec(hostIp, 'chmod +x /data/UserData/move-anything/move-anything /data/UserData/move-anything/shim-entrypoint.sh /data/UserData/move-anything/start.sh /data/UserData/move-anything/stop.sh', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/move-anything/move-anything /data/UserData/move-anything/shim-entrypoint.sh /data/UserData/move-anything/start.sh /data/UserData/move-anything/stop.sh', { username: 'root' });
 
         console.log('[DEBUG] Permissions fixed');
         return { success: true };
@@ -2235,15 +2436,15 @@ async function uninstallMoveEverything(hostname) {
 
         // Stop move-anything service
         console.log('[DEBUG] Stopping move-anything service...');
-        await sshExec(hostIp, 'systemctl stop move-anything 2>/dev/null || killall move-anything 2>/dev/null || true', asRoot);
+        await sshExecWithRetry(hostIp, 'systemctl stop move-anything 2>/dev/null || killall move-anything 2>/dev/null || true', asRoot);
 
         // Remove shim from /usr/lib if it exists
         console.log('[DEBUG] Removing shim library...');
-        await sshExec(hostIp, 'rm -f /usr/lib/move-anything-shim.so', asRoot);
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so', asRoot);
 
         // Remove Move Everything directory
         console.log('[DEBUG] Removing Move Everything files...');
-        await sshExec(hostIp, 'rm -rf /data/UserData/move-anything', asRoot);
+        await sshExecWithRetry(hostIp, 'rm -rf /data/UserData/move-anything', asRoot);
 
         // Restore original Move binary if backup exists
         console.log('[DEBUG] Restoring original Move binary...');
@@ -2255,7 +2456,7 @@ async function uninstallMoveEverything(hostname) {
                 echo "no_backup"
             fi
         `;
-        const restoreResult = (await sshExec(hostIp, restoreCmd, asRoot)).trim();
+        const restoreResult = (await sshExecWithRetry(hostIp, restoreCmd, asRoot)).trim();
 
         if (restoreResult === 'no_backup') {
             console.log('[DEBUG] No backup found, original Move binary may already be in place');
@@ -2263,7 +2464,7 @@ async function uninstallMoveEverything(hostname) {
 
         // Restart the device
         console.log('[DEBUG] Restarting device...');
-        await sshExec(hostIp, 'reboot', asRoot);
+        await sshExecWithRetry(hostIp, 'reboot', asRoot);
 
         console.log('[DEBUG] Uninstall complete');
         return {
@@ -2583,7 +2784,7 @@ async function wifiGetStatus(hostname) {
     const isUsbConnection = cachedDeviceIp ? /^192\.168\.7\./.test(cachedDeviceIp) : false;
 
     try {
-        const techOutput = await sshExec(hostIp, 'connmanctl technologies');
+        const techOutput = await sshExecWithRetry(hostIp, 'connmanctl technologies');
         // Check if WiFi technology is powered on
         const wifiSection = techOutput.split('/net/connman/technology/wifi');
         if (wifiSection.length > 1) {
@@ -2595,7 +2796,7 @@ async function wifiGetStatus(hostname) {
     }
 
     try {
-        const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+        const servicesOutput = await sshExecWithRetry(hostIp, 'connmanctl services');
         const services = parseServices(servicesOutput);
         connectedService = services.find(s => s.connected) || null;
     } catch (err) {
@@ -2608,19 +2809,19 @@ async function wifiGetStatus(hostname) {
 async function wifiScan(hostname) {
     const hostIp = cachedDeviceIp || hostname;
     try {
-        await sshExec(hostIp, 'connmanctl scan wifi');
+        await sshExecWithRetry(hostIp, 'connmanctl scan wifi');
     } catch (err) {
         console.log('[WIFI] Scan command error (may be normal):', err.message);
     }
     // Wait for scan to complete
     await new Promise(resolve => setTimeout(resolve, 3000));
-    const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+    const servicesOutput = await sshExecWithRetry(hostIp, 'connmanctl services');
     return parseServices(servicesOutput);
 }
 
 async function wifiListServices(hostname) {
     const hostIp = cachedDeviceIp || hostname;
-    const servicesOutput = await sshExec(hostIp, 'connmanctl services');
+    const servicesOutput = await sshExecWithRetry(hostIp, 'connmanctl services');
     return parseServices(servicesOutput);
 }
 
@@ -2646,8 +2847,8 @@ async function wifiConnect(hostname, serviceId, passphrase) {
 
         console.log('[WIFI] Writing service settings for:', ssid);
         try {
-            await sshExec(hostIp, `mkdir -p ${settingsDir}`, { username: 'root' });
-            await sshExec(hostIp, `printf '${settingsHex}' > ${settingsDir}/settings`, { username: 'root' });
+            await sshExecWithRetry(hostIp, `mkdir -p ${settingsDir}`, { username: 'root' });
+            await sshExecWithRetry(hostIp, `printf '${settingsHex}' > ${settingsDir}/settings`, { username: 'root' });
         } catch (err) {
             throw new Error(`Failed to write WiFi settings: ${err.message}`);
         }
@@ -2656,7 +2857,7 @@ async function wifiConnect(hostname, serviceId, passphrase) {
         // then explicitly connect (otherwise it reconnects to the previous favorite).
         try {
             console.log('[WIFI] Restarting connman to pick up new credentials...');
-            await sshExec(hostIp, `/etc/init.d/connman restart`, { username: 'root' });
+            await sshExecWithRetry(hostIp, `/etc/init.d/connman restart`, { username: 'root' });
         } catch (err) {
             if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
                 console.log('[WIFI] SSH dropped during connman restart (expected)');
@@ -2671,7 +2872,7 @@ async function wifiConnect(hostname, serviceId, passphrase) {
     // Connect to the target network (works for new, open, and saved networks)
     try {
         console.log('[WIFI] Connecting to:', serviceId);
-        await sshExec(hostIp, `nohup connmanctl connect ${serviceId} > /dev/null 2>&1 &`);
+        await sshExecWithRetry(hostIp, `nohup connmanctl connect ${serviceId} > /dev/null 2>&1 &`);
     } catch (err) {
         if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
             console.log('[WIFI] SSH dropped during connect (expected when switching networks)');
@@ -2685,7 +2886,7 @@ async function wifiDisconnect(hostname, serviceId) {
     validateServiceId(serviceId);
     const hostIp = cachedDeviceIp || hostname;
     try {
-        await sshExec(hostIp, `nohup connmanctl disconnect ${serviceId} > /dev/null 2>&1 &`);
+        await sshExecWithRetry(hostIp, `nohup connmanctl disconnect ${serviceId} > /dev/null 2>&1 &`);
     } catch (err) {
         // SSH drop is expected when disconnecting the active WiFi network
         if (err.message && (err.message.includes('Timed out') || err.message.includes('ECONNRESET') || err.message.includes('Connection lost'))) {
@@ -2699,10 +2900,10 @@ async function wifiDisconnect(hostname, serviceId) {
 async function wifiRemoveService(hostname, serviceId) {
     validateServiceId(serviceId);
     const hostIp = cachedDeviceIp || hostname;
-    await sshExec(hostIp, `connmanctl config ${serviceId} --remove`);
+    await sshExecWithRetry(hostIp, `connmanctl config ${serviceId} --remove`);
     // Also remove the service settings directory
     try {
-        await sshExec(hostIp, `rm -rf /data/settings/connman/lib/connman/${serviceId}`, { username: 'root' });
+        await sshExecWithRetry(hostIp, `rm -rf /data/settings/connman/lib/connman/${serviceId}`, { username: 'root' });
     } catch (err) {
         console.log('[WIFI] Error removing service directory:', err.message);
     }
@@ -2710,7 +2911,7 @@ async function wifiRemoveService(hostname, serviceId) {
 
 async function wifiEnableRadio(hostname) {
     const hostIp = cachedDeviceIp || hostname;
-    await sshExec(hostIp, 'connmanctl enable wifi', { username: 'root' });
+    await sshExecWithRetry(hostIp, 'connmanctl enable wifi', { username: 'root' });
 }
 
 module.exports = {
@@ -2732,6 +2933,7 @@ module.exports = {
     downloadRelease,
     installMain,
     installModulePackage,
+    installModuleBatch,
     removeModulePackage,
     uploadModuleAssets,
     listRemoteDir,
