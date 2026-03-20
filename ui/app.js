@@ -1173,7 +1173,8 @@ function displayManagementModules() {
         statusEl.textContent = 'All modules installed and up to date.';
         statusEl.style.display = '';
     } else if (!hasAnyUpgrade && versionInfo.newModules.length > 0) {
-        statusEl.textContent = 'All installed modules are up to date.';
+        const n = versionInfo.newModules.length;
+        statusEl.textContent = `All installed modules are up to date. ${n} new module${n === 1 ? '' : 's'} available to install.`;
         statusEl.style.display = '';
     } else {
         statusEl.style.display = 'none';

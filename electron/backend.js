@@ -2318,54 +2318,89 @@ async function setStandaloneState(hostname, enabled) {
 
 async function uploadModuleAssets(localPaths, remoteDir, hostname) {
     try {
+        const { exec } = require('child_process');
         const hostIp = cachedDeviceIp || hostname;
         console.log(`[DEBUG] Uploading ${localPaths.length} asset(s) to ${remoteDir}`);
 
         // Ensure remote directory exists
         await sshExecWithRetry(hostIp, `mkdir -p "${remoteDir}"`);
 
+        // Stage all files into a temp directory that mirrors the remote layout,
+        // then tar + upload + extract as a single transfer.
+        const stagingDir = path.join(os.tmpdir(), `me-asset-upload-${Date.now()}`);
+        fs.mkdirSync(stagingDir, { recursive: true });
+
         const results = [];
 
-        async function uploadEntry(localPath, targetDir, isTopLevel = false) {
+        function stageEntry(localPath, targetSubdir, isTopLevel = false) {
             const stat = fs.statSync(localPath);
             if (stat.isDirectory()) {
-                // For top-level selected folders, upload contents directly into targetDir
-                // (avoids roms/roms when user selects a "roms" folder to upload into "roms/")
-                // For nested subdirectories, preserve the folder structure
-                let remoteSubdir;
+                // Top-level selected folders: upload contents directly (avoids roms/roms)
+                // Nested subdirectories: preserve folder structure
+                let destDir;
                 if (isTopLevel) {
-                    remoteSubdir = targetDir;
-                    console.log(`[DEBUG] Uploading contents of ${path.basename(localPath)}/ into ${remoteSubdir}`);
+                    destDir = targetSubdir;
                 } else {
-                    const folderName = path.basename(localPath);
-                    remoteSubdir = `${targetDir}/${folderName}`;
-                    await sshExecWithRetry(hostIp, `mkdir -p "${remoteSubdir}"`);
-                    console.log(`[DEBUG] Created remote dir ${remoteSubdir}`);
+                    destDir = path.join(targetSubdir, path.basename(localPath));
                 }
+                fs.mkdirSync(path.join(stagingDir, destDir), { recursive: true });
 
                 const entries = fs.readdirSync(localPath);
                 for (const entry of entries) {
-                    await uploadEntry(path.join(localPath, entry), remoteSubdir, false);
+                    stageEntry(path.join(localPath, entry), destDir, false);
                 }
                 results.push({ file: path.basename(localPath) + '/', success: true });
             } else {
                 const filename = path.basename(localPath);
-                const remotePath = `${targetDir}/${filename}`;
-                console.log(`[DEBUG] Uploading ${filename}...`);
-                try {
-                    await sftpUpload(hostIp, localPath, remotePath);
-                    results.push({ file: filename, success: true });
-                    console.log(`[DEBUG] Uploaded ${filename}`);
-                } catch (err) {
-                    console.error(`[DEBUG] Failed to upload ${filename}:`, err.message);
-                    results.push({ file: filename, success: false, error: err.message });
+                // Skip macOS resource fork files and metadata
+                if (filename.startsWith('._') || filename === '.DS_Store') {
+                    console.log(`[DEBUG] Skipping macOS metadata: ${filename}`);
+                    return;
                 }
+                const destPath = path.join(stagingDir, targetSubdir, filename);
+                fs.mkdirSync(path.dirname(destPath), { recursive: true });
+                fs.copyFileSync(localPath, destPath);
+                results.push({ file: filename, success: true });
             }
         }
 
         for (const localPath of localPaths) {
-            await uploadEntry(localPath, remoteDir, true);
+            stageEntry(localPath, '.', true);
         }
+
+        // Count staged files for logging
+        const stagedFiles = results.filter(r => !r.file.endsWith('/')).length;
+
+        if (stagedFiles === 0) {
+            console.log('[DEBUG] No files to upload');
+            fs.rmSync(stagingDir, { recursive: true, force: true });
+            return results;
+        }
+
+        // Create tar archive from staged directory
+        const tarPath = path.join(os.tmpdir(), `me-assets-${Date.now()}.tar.gz`);
+        console.log(`[DEBUG] Archiving ${stagedFiles} files into tarball...`);
+
+        await new Promise((resolve, reject) => {
+            exec(`COPYFILE_DISABLE=1 tar czf "${tarPath}" -C "${stagingDir}" .`, (err) => {
+                if (err) reject(new Error(`tar failed: ${err.message}`));
+                else resolve();
+            });
+        });
+
+        // Single SFTP upload
+        const remoteTar = `/data/UserData/me-assets-${Date.now()}.tar.gz`;
+        const tarSize = (fs.statSync(tarPath).size / 1024).toFixed(0);
+        console.log(`[DEBUG] Uploading ${tarSize}KB archive (${stagedFiles} files)...`);
+        await sftpUpload(hostIp, tarPath, remoteTar);
+
+        // Extract on device and clean up
+        await sshExecWithRetry(hostIp, `mkdir -p "${remoteDir}" && tar xzf "${remoteTar}" -C "${remoteDir}" && rm -f "${remoteTar}"`);
+        console.log(`[DEBUG] Extracted ${stagedFiles} files to ${remoteDir}`);
+
+        // Clean up local temp files
+        fs.rmSync(stagingDir, { recursive: true, force: true });
+        fs.unlinkSync(tarPath);
 
         return results;
     } catch (err) {
