@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const backend = require('./backend');
@@ -46,6 +46,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    // Pass Electron's net module to backend — uses Chromium's network stack
+    // which properly triggers macOS Local Network Privacy prompts
+    backend.setElectronNet(net);
+
     createWindow();
 
     app.on('activate', () => {
