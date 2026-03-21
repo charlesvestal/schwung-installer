@@ -3,22 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Move Everything Installer</title>
+    <title>Schwung Installer</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="app">
         <!-- Warning Screen -->
         <div id="screen-warning" class="screen active">
-            <h1 id="warning-title">Move Everything Installer</h1>
+            <h1 id="warning-title">Schwung Installer</h1>
             <div id="update-banner" class="update-banner" style="display: none;">
                 <span id="update-banner-text"></span>
                 <a id="update-banner-link" href="#" target="_blank">Download</a>
             </div>
             <div class="warning-box" id="warning-box">
-                <p><strong>Are you sure you want to install Move Everything on your Ableton Move?</strong></p>
+                <p><strong>Are you sure you want to install Schwung on your Ableton Move?</strong></p>
                 <p>This software is <strong>community-developed</strong> and not officially supported by Ableton.</p>
-                <p>The installation is designed to be safe and reversible. The authors accept no liability for issues, but countless users have installed Move Everything with no reports of permanent damage or bricking a device.</p>
+                <p>The installation is designed to be safe and reversible. The authors accept no liability for issues, but countless users have installed Schwung with no reports of permanent damage or bricking a device.</p>
                 <p><strong>Note:</strong> Installation works best when your Move is connected via <strong>WiFi</strong>, not USB-C. Ensure your Move is connected to the same network as this computer.</p>
             </div>
             <div class="action-buttons">
@@ -29,7 +29,7 @@
 
         <!-- Device Discovery Screen -->
         <div id="screen-discovery" class="screen">
-            <h1>Move Everything Installer</h1>
+            <h1>Schwung Installer</h1>
             <div class="hostname-entry">
                 <label for="device-hostname">Device hostname:</label>
                 <input type="text" id="device-hostname" value="move.local">
@@ -69,7 +69,7 @@
             <p class="instruction" id="ssh-key-message"></p>
             <div class="info-box" id="ssh-key-explanation" style="display: none;">
                 <p><strong>What is this?</strong></p>
-                <p>A secure connection key lets the installer communicate safely with your Move device. This key will only be used for Move Everything installation and won't affect other systems.</p>
+                <p>A secure connection key lets the installer communicate safely with your Move device. This key will only be used for Schwung installation and won't affect other systems.</p>
             </div>
             <div class="action-buttons">
                 <button id="btn-back-ssh-key" class="secondary">Back</button>
@@ -104,7 +104,7 @@
                 <div class="reenable-banner-icon">&#9888;</div>
                 <div class="reenable-banner-content">
                     <strong>Firmware update detected</strong>
-                    <p>Move Everything is installed but inactive. Your modules and settings are intact.</p>
+                    <p>Schwung is installed but inactive. Your modules and settings are intact.</p>
                 </div>
                 <button id="btn-reenable" class="btn-reenable">Re-enable</button>
             </div>
@@ -198,7 +198,7 @@
 
         <!-- Installing Screen -->
         <div id="screen-installing" class="screen">
-            <h1>Installing Move Everything</h1>
+            <h1>Installing Schwung</h1>
             <div class="progress-container">
                 <div id="install-progress" class="progress-bar">
                     <div class="progress-fill"></div>
@@ -212,7 +212,7 @@
         <div id="screen-success" class="screen">
             <h1>You're All Set!</h1>
             <div class="success-icon">✓</div>
-            <p class="instruction">Move Everything has been successfully installed on your device.</p>
+            <p class="instruction">Schwung has been successfully installed on your device.</p>
             <div class="info-box" id="success-next-steps">
             </div>
             <button id="btn-back-manage" class="secondary" style="display: none;">Back to Manage</button>
@@ -294,7 +294,7 @@
     </div>
     <footer id="app-footer">
         <a href="#" id="btn-export-logs">Export Debug Logs</a>
-        <a href="https://github.com/charlesvestal/move-everything/blob/main/MANUAL.md" target="_blank">Manual</a>
+        <a href="https://github.com/charlesvestal/schwung/blob/main/MANUAL.md" target="_blank">Manual</a>
         <a href="https://discord.com/invite/GHWaZCC9bQ" target="_blank">Discord</a>
     </footer>
 

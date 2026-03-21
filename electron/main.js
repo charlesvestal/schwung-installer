@@ -294,7 +294,7 @@ ipcMain.handle('wifi_enable_radio', async (event, { hostname }) => {
 ipcMain.handle('export_logs', async (event, { logs }) => {
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
         title: 'Save Debug Logs',
-        defaultPath: `move-everything-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
+        defaultPath: `schwung-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
         filters: [{ name: 'Text Files', extensions: ['txt'] }]
     });
     if (filePath) {

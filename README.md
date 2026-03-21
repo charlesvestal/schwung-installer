@@ -1,6 +1,6 @@
-# Move Everything Installer
+# Schwung Installer
 
-Desktop app for installing [Move Everything](https://github.com/charlesvestal/move-everything) on your Ableton Move.
+Desktop app for installing [Schwung](https://github.com/charlesvestal/schwung) on your Ableton Move.
 
 ## Requirements
 
@@ -13,16 +13,16 @@ The installer needs [Git for Windows](https://git-scm.com/download/win) to run t
 
 ## Download
 
-Download the latest release for your platform from the [Releases page](https://github.com/charlesvestal/move-everything-installer/releases):
+Download the latest release for your platform from the [Releases page](https://github.com/charlesvestal/schwung-installer/releases):
 
 | Platform | File |
 |----------|------|
-| macOS (Apple Silicon) | `Move Everything Installer-*-mac-arm64.zip` |
-| macOS (Intel) | `Move Everything Installer-*-mac-x64.zip` |
-| Windows (x64) | `Move Everything Installer-*-win-x64.exe` |
-| Windows (ARM64) | `Move Everything Installer-*-win-arm64.exe` |
-| Linux (x64) | `Move Everything Installer-*-linux-x64.deb` |
-| Linux (ARM64) | `Move Everything Installer-*-linux-arm64.deb` |
+| macOS (Apple Silicon) | `Schwung Installer-*-mac-arm64.zip` |
+| macOS (Intel) | `Schwung Installer-*-mac-x64.zip` |
+| Windows (x64) | `Schwung Installer-*-win-x64.exe` |
+| Windows (ARM64) | `Schwung Installer-*-win-arm64.exe` |
+| Linux (x64) | `Schwung Installer-*-linux-x64.deb` |
+| Linux (ARM64) | `Schwung Installer-*-linux-arm64.deb` |
 
 ## First-Time Setup
 
@@ -37,12 +37,12 @@ On subsequent runs, the installer remembers your device and skips the authentica
 
 ## Managing Your Installation
 
-When Move Everything is already installed, the installer switches to management mode:
+When Schwung is already installed, the installer switches to management mode:
 
 - **Install New Modules** — browse and install additional sound generators, effects, and utilities
 - **Upgrade Core** — update to the latest version when available
 - **Screen Reader** — toggle text-to-speech accessibility
-- **Uninstall** — remove Move Everything and restore stock firmware
+- **Uninstall** — remove Schwung and restore stock firmware
 
 ## Troubleshooting
 
@@ -69,7 +69,7 @@ When Move Everything is already installed, the installer switches to management 
 
 ## Debug Logs
 
-Every screen has an "Export Debug Logs" link in the footer. If you run into problems, export the logs and include them when [reporting an issue](https://github.com/charlesvestal/move-everything-installer/issues).
+Every screen has an "Export Debug Logs" link in the footer. If you run into problems, export the logs and include them when [reporting an issue](https://github.com/charlesvestal/schwung-installer/issues).
 
 ## Development
 
@@ -92,7 +92,7 @@ Produces platform-specific packages in `dist/`.
 
 ## AI Assistance Disclaimer
 
-This module is part of Move Everything and was developed with AI assistance, including Claude, Codex, and other AI assistants.
+This module is part of Schwung and was developed with AI assistance, including Claude, Codex, and other AI assistants.
 
 All architecture, implementation, and release decisions are reviewed by human maintainers.  
 AI-assisted content may still contain errors, so please validate functionality, security, and license compatibility before production use.

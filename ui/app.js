@@ -23,7 +23,7 @@ function addLog(source, message) {
 }
 
 async function exportLogs() {
-    const header = `Move Everything Installer Logs\nExported: ${new Date().toISOString()}\nPlatform: ${navigator.platform}\nUser Agent: ${navigator.userAgent}\n${'='.repeat(60)}\n\n`;
+    const header = `Schwung Installer Logs\nExported: ${new Date().toISOString()}\nPlatform: ${navigator.platform}\nUser Agent: ${navigator.userAgent}\n${'='.repeat(60)}\n\n`;
     const logs = header + logBuffer.join('\n');
     try {
         const saved = await window.installer.invoke('export_logs', { logs });
@@ -499,16 +499,16 @@ function updateVersionCheckStatus(message) {
 
 async function checkVersions() {
     try {
-        console.log('[DEBUG] Checking if Move Everything is installed...');
+        console.log('[DEBUG] Checking if Schwung is installed...');
 
         const hostname = state.deviceIp;
 
-        // Quick lightweight check: is Move Everything installed? (doesn't scan modules)
+        // Quick lightweight check: is Schwung installed? (doesn't scan modules)
         const coreCheck = await window.installer.invoke('check_core_installation', { hostname });
 
         if (!coreCheck.installed) {
             // Not installed - go directly to fresh install flow
-            console.log('[DEBUG] Move Everything not installed, showing installation options');
+            console.log('[DEBUG] Schwung not installed, showing installation options');
             state.managementMode = false;
             state.installedModules = [];
             await loadModuleList();
@@ -541,7 +541,7 @@ async function checkVersions() {
         }
 
         // Already installed - go directly to combined upgrade & manage screen
-        console.log('[DEBUG] Move Everything installed, loading upgrade & manage screen...');
+        console.log('[DEBUG] Schwung installed, loading upgrade & manage screen...');
         state.managementMode = true;
 
         // Set up SSH config once for the session
@@ -942,7 +942,7 @@ function displayManagementModules() {
     coreInfo.className = 'module-row-info';
 
     const coreTitle = document.createElement('h4');
-    coreTitle.textContent = 'Move Everything Core';
+    coreTitle.textContent = 'Schwung Core';
     coreInfo.appendChild(coreTitle);
 
     const coreVersion = document.createElement('span');
@@ -1181,7 +1181,7 @@ function displayManagementModules() {
 }
 
 async function handleUpgradeCore() {
-    if (!confirm('Upgrade Move Everything Core?')) return;
+    if (!confirm('Upgrade Schwung Core?')) return;
 
     showScreen('installing');
     try {
@@ -1191,7 +1191,7 @@ async function handleUpgradeCore() {
         checklist.innerHTML = `
             <div class="checklist-item" data-item-id="core">
                 <div class="checklist-icon pending">\u25CB</div>
-                <div class="checklist-item-text">Move Everything Core</div>
+                <div class="checklist-item-text">Schwung Core</div>
             </div>
         `;
 
@@ -1208,7 +1208,7 @@ async function handleUpgradeCore() {
             destPath: `/tmp/${release.asset_name}`
         });
 
-        updateInstallProgress('Upgrading Move Everything core...', 30);
+        updateInstallProgress('Upgrading Schwung core...', 30);
         await window.installer.invoke('install_main', {
             tarballPath,
             hostname: state.deviceIp,
@@ -1246,7 +1246,7 @@ async function handleUpgradeAll() {
         // Build checklist manually
         const checklist = document.getElementById('install-checklist');
         const allItems = [];
-        if (hasCore) allItems.push({ id: 'core', name: 'Move Everything Core' });
+        if (hasCore) allItems.push({ id: 'core', name: 'Schwung Core' });
         moduleObjects.forEach(m => allItems.push({ id: m.id, name: m.name }));
 
         checklist.innerHTML = allItems.map(item => `
@@ -1273,7 +1273,7 @@ async function handleUpgradeAll() {
                 destPath: `/tmp/${release.asset_name}`
             });
 
-            updateInstallProgress('Upgrading Move Everything core...', 20);
+            updateInstallProgress('Upgrading Schwung core...', 20);
             await window.installer.invoke('install_main', {
                 tarballPath,
                 hostname: state.deviceIp,
@@ -1644,8 +1644,8 @@ function isAssetBrowserAtRoot() {
 function openAssetBrowser(moduleId, moduleName, componentType, assets) {
     const categoryPath = getInstallSubdir(componentType);
     const basePath = assets.path === '.'
-        ? `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}`
-        : `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}/${assets.path}`;
+        ? `/data/UserData/schwung/modules/${categoryPath}/${moduleId}`
+        : `/data/UserData/schwung/modules/${categoryPath}/${moduleId}/${assets.path}`;
 
     assetBrowser.open = true;
     assetBrowser.moduleId = moduleId;
@@ -1683,7 +1683,7 @@ function closeAssetBrowser() {
 }
 
 function openGlobalFileBrowser() {
-    const basePath = '/data/UserData/move-anything';
+    const basePath = '/data/UserData/schwung';
 
     assetBrowser.open = true;
     assetBrowser.moduleId = null;
@@ -1697,7 +1697,7 @@ function openGlobalFileBrowser() {
     document.getElementById('asset-browser-breadcrumb').innerHTML = '';
 
     const hintEl = document.getElementById('asset-browser-hint');
-    hintEl.textContent = 'Upload assets for individual modules or browse the entire Move Everything folder.';
+    hintEl.textContent = 'Upload assets for individual modules or browse the entire Schwung folder.';
     hintEl.style.display = 'block';
 
     setAssetStatus('', null);
@@ -1997,7 +1997,7 @@ function initializeChecklist(modules) {
     // Always add core item for fresh install
     items.push({
         id: 'core',
-        name: 'Move Everything Core',
+        name: 'Schwung Core',
         status: 'pending'
     });
 
@@ -2092,7 +2092,7 @@ async function startInstallation() {
             // Install main package
             const coreAction = 'Installing';
             updateChecklistItem('core', 'in-progress');
-            updateInstallProgress(`${coreAction} Move Everything core...`, 30);
+            updateInstallProgress(`${coreAction} Schwung core...`, 30);
             await window.installer.invoke('install_main', {
                 tarballPath: mainTarballPath,
                 hostname: state.deviceIp,
@@ -2171,7 +2171,7 @@ function populateSuccessScreen(options = {}) {
 
     if (isReenable) {
         document.querySelector('#screen-success h1').textContent = 'Re-enabled!';
-        instructionEl.textContent = 'Move Everything has been re-enabled. All your modules and settings are intact.';
+        instructionEl.textContent = 'Schwung has been re-enabled. All your modules and settings are intact.';
         container.style.display = 'none';
         backBtn.style.display = '';
         startOverBtn.style.display = 'none';
@@ -2181,8 +2181,8 @@ function populateSuccessScreen(options = {}) {
 
     if (isUninstall) {
         document.querySelector('#screen-success h1').textContent = 'Uninstall Complete';
-        instructionEl.textContent = 'Move Everything has been removed from your device.';
-        container.innerHTML = '<p>You can reinstall Move Everything by clicking "Start Over" below.</p>';
+        instructionEl.textContent = 'Schwung has been removed from your device.';
+        container.innerHTML = '<p>You can reinstall Schwung by clicking "Start Over" below.</p>';
         container.style.display = '';
         backBtn.style.display = 'none';
         startOverBtn.style.display = '';
@@ -2200,7 +2200,7 @@ function populateSuccessScreen(options = {}) {
 
     // Fresh install
     document.querySelector('#screen-success h1').textContent = "You're All Set!";
-    instructionEl.textContent = 'Move Everything has been successfully installed on your device.';
+    instructionEl.textContent = 'Schwung has been successfully installed on your device.';
     backBtn.style.display = '';
 
     let html = '<p><strong>Getting Started:</strong></p>';
@@ -2218,7 +2218,7 @@ function populateSuccessScreen(options = {}) {
     }
 
     html += '</ul>';
-    html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/move-everything/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
+    html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/schwung/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
     container.innerHTML = html;
     container.style.display = '';
 }
@@ -2300,11 +2300,11 @@ function parseError(error) {
     if (errorStr.includes('permission denied') && (errorStr.includes('sftp') || errorStr.includes('module') || errorStr.includes('mkdir') || errorStr.includes('tar'))) {
         return {
             title: 'Permission Error',
-            message: 'Could not write to the Move Everything directory on your device.',
+            message: 'Could not write to the Schwung directory on your device.',
             suggestions: [
                 'Some files on the device may be owned by root from a previous install',
                 'Try "Repair Installation" from the menu to fix permissions',
-                'Or SSH in as root and run: chown -R ableton:ableton /data/UserData/move-anything'
+                'Or SSH in as root and run: chown -R ableton:ableton /data/UserData/schwung'
             ]
         };
     }
@@ -2700,7 +2700,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const savedCookie = await window.installer.invoke('get_saved_cookie');
         if (savedCookie) {
-            document.getElementById('warning-title').textContent = 'Move Everything Installer';
+            document.getElementById('warning-title').textContent = 'Schwung Installer';
             document.getElementById('warning-box').innerHTML = `
                 <p><strong>Welcome back!</strong> This installer will connect to your Ableton Move to manage your installation.</p>
                 <p><strong>Note:</strong> Ensure your Move is connected to the same WiFi network as this computer.</p>
@@ -2880,7 +2880,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('btn-reenable').onclick = async (e) => {
         e.preventDefault();
-        if (!confirm('Re-enable Move Everything?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.')) return;
+        if (!confirm('Re-enable Schwung?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.')) return;
 
         showScreen('installing');
         try {
@@ -2888,12 +2888,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             checklist.innerHTML = `
                 <div class="checklist-item" data-item-id="reenable">
                     <div class="checklist-icon pending">\u25CB</div>
-                    <div class="checklist-item-text">Re-enable Move Everything</div>
+                    <div class="checklist-item-text">Re-enable Schwung</div>
                 </div>
             `;
 
             updateChecklistItem('reenable', 'in-progress');
-            updateInstallProgress('Re-enabling Move Everything...', 20);
+            updateInstallProgress('Re-enabling Schwung...', 20);
 
             const hostname = state.deviceIp;
             await window.installer.invoke('reenable_move_everything', { hostname });
@@ -2918,7 +2918,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (payloadMissing) {
                 const shouldReinstall = confirm(
-                    'Re-enable cannot continue because the core payload is missing from /data/UserData/move-anything.\n\nReinstall Move Everything core now?'
+                    'Re-enable cannot continue because the core payload is missing from /data/UserData/schwung.\n\nReinstall Schwung core now?'
                 );
                 if (shouldReinstall) {
                     await handleUpgradeCore();
@@ -2945,7 +2945,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             // Build checklist
             const checklist = document.getElementById('install-checklist');
-            const allItems = [{ id: 'core', name: 'Move Everything Core' }, ...allInstalled.map(m => ({ id: m.id, name: m.name }))];
+            const allItems = [{ id: 'core', name: 'Schwung Core' }, ...allInstalled.map(m => ({ id: m.id, name: m.name }))];
             checklist.innerHTML = allItems.map(item => `
                 <div class="checklist-item" data-item-id="${item.id}">
                     <div class="checklist-icon pending">\u25CB</div>
@@ -2967,7 +2967,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 destPath: `/tmp/${release.asset_name}`
             });
 
-            updateInstallProgress('Reinstalling Move Everything core...', 20);
+            updateInstallProgress('Reinstalling Schwung core...', 20);
             const installFlags = [];
             if (!state.enableStandalone) installFlags.push('--disable-standalone');
             if (state.enableScreenReader) installFlags.push('--enable-screen-reader');
@@ -3023,10 +3023,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('link-uninstall').onclick = async (e) => {
         e.preventDefault();
-        if (confirm('Are you sure you want to uninstall Move Everything? This will restore your Move to stock firmware.')) {
+        if (confirm('Are you sure you want to uninstall Schwung? This will restore your Move to stock firmware.')) {
             try {
                 const hostname = state.deviceIp;
-                updateInstallProgress('Uninstalling Move Everything...', 50);
+                updateInstallProgress('Uninstalling Schwung...', 50);
                 showScreen('installing');
 
                 const result = await window.installer.invoke('uninstall_move_everything', { hostname });

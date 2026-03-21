@@ -1,7 +1,7 @@
 {
-  "name": "move-everything-installer",
+  "name": "schwung-installer",
   "version": "0.2.22",
-  "description": "Cross-platform installer for Move Everything",
+  "description": "Cross-platform installer for Schwung",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -28,8 +28,8 @@
     "electron-builder": "^26.7.0"
   },
   "build": {
-    "appId": "com.move-everything.installer",
-    "productName": "Move Everything Installer",
+    "appId": "com.schwung.installer",
+    "productName": "Schwung Installer",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
@@ -51,7 +51,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSLocalNetworkUsageDescription": "Move Everything Installer needs local network access to find and connect to your Ableton Move over Wi-Fi.",
+        "NSLocalNetworkUsageDescription": "Schwung Installer needs local network access to find and connect to your Ableton Move over Wi-Fi.",
         "NSBonjourServices": [
           "_http._tcp",
           "_ssh._tcp"

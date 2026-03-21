@@ -54,7 +54,7 @@ The original `install.sh` script was specifically designed with screen reader ac
 ```html
 <!-- Add semantic structure -->
 <header role="banner">
-  <h1>Move Everything Installer</h1>
+  <h1>Schwung Installer</h1>
 </header>
 
 <main role="main">
@@ -127,7 +127,7 @@ input:focus {
 **Required changes:**
 ```html
 <!-- Add page title -->
-<title>Move Everything Installer - Device Discovery</title>
+<title>Schwung Installer - Device Discovery</title>
 
 <!-- Add skip link -->
 <a href="#main-content" class="skip-link">Skip to main content</a>

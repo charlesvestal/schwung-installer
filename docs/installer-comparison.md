@@ -29,7 +29,7 @@
 
 **Required changes:**
 - Validate tarball structure via SSH before extraction
-- Check for required files: `move-anything-shim.so`, `shim-entrypoint.sh`
+- Check for required files: `schwung-shim.so`, `shim-entrypoint.sh`
 - Detect corrupted downloads early
 
 ### 4. Root SSH Fallback
@@ -59,7 +59,7 @@
 **Required changes:**
 - Add feature selection screen
 - Allow enabling/disabling: Shadow UI, Standalone mode, Screen Reader
-- Write features.json to `/data/UserData/move-anything/config/`
+- Write features.json to `/data/UserData/schwung/config/`
 
 ### 7. Move Restart
 **install.sh has:** Restarts Move cleanly via init.d, verifies shim loaded (lines 969-997)

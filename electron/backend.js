@@ -16,7 +16,7 @@ const dnsResolve4 = promisify(dns.resolve4);
 
 // State management
 let savedCookie = null;
-const cookieStore = path.join(os.homedir(), '.move-everything-installer-cookie');
+const cookieStore = path.join(os.homedir(), '.schwung-installer-cookie');
 
 // Store reference to main window for logging
 let mainWindowForLogging = null;
@@ -469,7 +469,7 @@ async function generateNewSshKey() {
             console.log('[DEBUG] Using native ssh-keygen to generate key');
 
             // Generate Ed25519 key using ssh-keygen
-            const keygenCmd = `ssh-keygen -t ed25519 -f "${keyPath}" -N "" -C "move-everything-installer"`;
+            const keygenCmd = `ssh-keygen -t ed25519 -f "${keyPath}" -N "" -C "schwung-installer"`;
             await execAsync(keygenCmd);
 
             console.log('[DEBUG] Key pair generated successfully using ssh-keygen');
@@ -501,7 +501,7 @@ async function generateNewSshKey() {
 
             // Export in OpenSSH format (which ssh2 can read)
             const privateKeyOpenSSH = sshpkPrivateKey.toString('openssh');
-            const publicKeySSH = sshpkPublicKey.toString('ssh') + ' move-everything-installer\n';
+            const publicKeySSH = sshpkPublicKey.toString('ssh') + ' schwung-installer\n';
 
             await writeFile(keyPath, privateKeyOpenSSH, { mode: 0o600 });
             await writeFile(`${keyPath}.pub`, publicKeySSH, { mode: 0o644 });
@@ -862,7 +862,7 @@ Host movedevice
 async function getModuleCatalog() {
     try {
         const response = await httpClient.get(
-            'https://raw.githubusercontent.com/charlesvestal/move-anything/main/module-catalog.json'
+            'https://raw.githubusercontent.com/charlesvestal/schwung/main/module-catalog.json'
         );
 
         if (response.status !== 200) {
@@ -927,7 +927,7 @@ async function getModuleCatalog() {
 async function getLatestRelease() {
     try {
         // Fetch all releases and find the latest binary release (v* tag, not installer-v*)
-        const response = await httpClient.get('https://api.github.com/repos/charlesvestal/move-anything/releases', {
+        const response = await httpClient.get('https://api.github.com/repos/charlesvestal/schwung/releases', {
             headers: {
                 'User-Agent': 'MoveEverything-Installer'
             }
@@ -950,8 +950,8 @@ async function getLatestRelease() {
             if (binaryRelease) {
                 const tagName = binaryRelease.tag_name;
                 const version = tagName.startsWith('v') ? tagName.substring(1) : tagName;
-                const assetName = 'move-anything.tar.gz';
-                const downloadUrl = `https://github.com/charlesvestal/move-everything/releases/download/${tagName}/${assetName}`;
+                const assetName = 'schwung.tar.gz';
+                const downloadUrl = `https://github.com/charlesvestal/schwung/releases/download/${tagName}/${assetName}`;
 
                 console.log('[DEBUG] Found binary release:', tagName, 'version:', version);
 
@@ -967,8 +967,8 @@ async function getLatestRelease() {
     } catch (err) {
         console.error('[DEBUG] Failed to get version from API:', err.message);
         // Fallback: try /releases/latest which may or may not be correct
-        const assetName = 'move-anything.tar.gz';
-        const downloadUrl = `https://github.com/charlesvestal/move-everything/releases/latest/download/${assetName}`;
+        const assetName = 'schwung.tar.gz';
+        const downloadUrl = `https://github.com/charlesvestal/schwung/releases/latest/download/${assetName}`;
         return {
             version: 'latest',
             asset_name: assetName,
@@ -980,7 +980,7 @@ async function getLatestRelease() {
 async function getLatestInstallerRelease() {
     try {
         const response = await httpClient.get(
-            'https://api.github.com/repos/charlesvestal/move-everything-installer/releases/latest',
+            'https://api.github.com/repos/charlesvestal/schwung-installer/releases/latest',
             { headers: { 'User-Agent': 'MoveEverything-Installer' } }
         );
         if (response.status === 200 && response.data.tag_name) {
@@ -1285,9 +1285,9 @@ async function sftpDownload(hostname, remotePath, localPath, { username = 'ablet
 
 async function downloadRemoteFile(hostname, remotePath, localPath) {
     try {
-        // Validate path is within move-anything directory
-        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
-            throw new Error('Path must be within /data/UserData/move-anything/');
+        // Validate path is within schwung directory
+        if (!remotePath.startsWith('/data/UserData/schwung/')) {
+            throw new Error('Path must be within /data/UserData/schwung/');
         }
         const hostIp = cachedDeviceIp || hostname;
         await sftpDownload(hostIp, remotePath, localPath);
@@ -1388,7 +1388,7 @@ async function installMain(tarballPath, hostname, flags = []) {
         try {
             // Download install.sh from GitHub (same source as the tarball)
             console.log('[DEBUG] Downloading install.sh from GitHub...');
-            const installScriptUrl = 'https://raw.githubusercontent.com/charlesvestal/move-anything/main/scripts/install.sh';
+            const installScriptUrl = 'https://raw.githubusercontent.com/charlesvestal/schwung/main/scripts/install.sh';
             const response = await httpClient.get(installScriptUrl);
             let installScriptContent = response.data;
 
@@ -1401,7 +1401,7 @@ async function installMain(tarballPath, hostname, flags = []) {
             await writeFile(tempInstallScript, installScriptContent, { mode: 0o755 });
 
             // Copy tarball to temp directory
-            const tempTarball = path.join(tempDir, 'move-anything.tar.gz');
+            const tempTarball = path.join(tempDir, 'schwung.tar.gz');
             await copyFile(tarballPath, tempTarball);
 
             // Pre-flight: verify Git Bash SSH can connect to movedevice
@@ -1438,7 +1438,7 @@ async function installMain(tarballPath, hostname, flags = []) {
             console.log('[DEBUG] Cleaning up stale files on device...');
             try {
                 const cleanupCmds = [
-                    'rm -f ~/move-anything.tar.gz',  // Remove old tarball (may be root-owned)
+                    'rm -f ~/schwung.tar.gz',  // Remove old tarball (may be root-owned)
                     'rm -rf /var/volatile/tmp/move-install-* /var/volatile/tmp/move-uninstall-*',  // Stale temp dirs
                     'rm -f /tmp/*.log /tmp/*.json /tmp/*.tar.gz'  // Logs, json, tarballs filling root partition
                 ];
@@ -1549,8 +1549,8 @@ async function installMain(tarballPath, hostname, flags = []) {
 async function fixPermissions(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
-        console.log('[DEBUG] Fixing permissions: chown -R ableton:users /data/UserData/move-anything');
-        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything', { username: 'root' });
+        console.log('[DEBUG] Fixing permissions: chown -R ableton:users /data/UserData/schwung');
+        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/schwung', { username: 'root' });
         console.log('[DEBUG] Permissions fixed');
         return true;
     } catch (err) {
@@ -1583,20 +1583,20 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
         // Ensure target directory is writable by ableton (may be root-owned from older installs)
         const categoryPath = getInstallSubdir(componentType);
         try {
-            await sshExecWithRetry(hostIp, `chown -R ableton:users /data/UserData/move-anything/modules/${categoryPath}`, { username: 'root' });
+            await sshExecWithRetry(hostIp, `chown -R ableton:users /data/UserData/schwung/modules/${categoryPath}`, { username: 'root' });
         } catch (chownErr) {
             console.log('[DEBUG] chown fix failed (non-fatal):', chownErr.message);
         }
 
-        // Upload to Move Everything directory using SFTP
-        const remotePath = `/data/UserData/move-anything/${filename}`;
+        // Upload to Schwung directory using SFTP
+        const remotePath = `/data/UserData/schwung/${filename}`;
         console.log(`[DEBUG] Uploading ${filename} to device via SFTP...`);
         await sftpUpload(hostIp, tarballPath, remotePath);
         console.log(`[DEBUG] Upload complete for ${moduleId}`);
 
         // Extract and install module
         console.log(`[DEBUG] Extracting ${moduleId} to modules/${categoryPath}/`);
-        await sshExecWithRetry(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
+        await sshExecWithRetry(hostIp, `cd /data/UserData/schwung && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
         console.log(`[DEBUG] Module ${moduleId} installed successfully`);
 
         return true;
@@ -1654,7 +1654,7 @@ async function installModuleBatch(modules, hostname, progressCallback = null) {
     for (let i = 0; i < downloadResults.length; i++) {
         const { module, localPath } = downloadResults[i];
         const filename = path.basename(localPath);
-        const remotePath = `/data/UserData/move-anything/${filename}`;
+        const remotePath = `/data/UserData/schwung/${filename}`;
 
         try {
             console.log(`[DEBUG] Uploading ${module.id} to device...`);
@@ -1681,11 +1681,11 @@ async function installModuleBatch(modules, hostname, progressCallback = null) {
         });
 
         try {
-            const fullCmd = `cd /data/UserData/move-anything && ${extractCmds.join(' && ')}`;
+            const fullCmd = `cd /data/UserData/schwung && ${extractCmds.join(' && ')}`;
             await sshExecWithRetry(hostIp, fullCmd);
 
             // Fix ownership in one shot
-            await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/schwung/modules', { username: 'root' });
 
             for (const { module } of uploaded) {
                 console.log(`[DEBUG] Module ${module.id} installed successfully`);
@@ -1697,7 +1697,7 @@ async function installModuleBatch(modules, hostname, progressCallback = null) {
             for (const { module, filename } of uploaded) {
                 try {
                     const categoryPath = getInstallSubdir(module.component_type);
-                    await sshExecWithRetry(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
+                    await sshExecWithRetry(hostIp, `cd /data/UserData/schwung && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
                     results.installed.push({ id: module.id, name: module.name });
                 } catch (extractErr) {
                     results.failed.push({ id: module.id, name: module.name, error: extractErr.message });
@@ -1705,7 +1705,7 @@ async function installModuleBatch(modules, hostname, progressCallback = null) {
             }
             // Fix ownership regardless
             try {
-                await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/modules', { username: 'root' });
+                await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/schwung/modules', { username: 'root' });
             } catch {}
         }
 
@@ -1737,7 +1737,7 @@ async function cleanDeviceTmp(hostname) {
             'rm -f /tmp/*.log /tmp/*.json /tmp/*.tar.gz',
             'rm -rf /tmp/move-install-* /tmp/move-uninstall-*',
             'rm -rf /var/volatile/tmp/move-install-* /var/volatile/tmp/move-uninstall-*',
-            'rm -f ~/move-anything.tar.gz'
+            'rm -f ~/schwung.tar.gz'
         ];
 
         for (const cmd of cleanupCmds) {
@@ -1798,9 +1798,9 @@ async function listRemoteDir(hostname, remotePath) {
 
 async function deleteRemotePath(hostname, remotePath) {
     try {
-        // Validate path is within move-anything directory
-        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
-            throw new Error('Path must be within /data/UserData/move-anything/');
+        // Validate path is within schwung directory
+        if (!remotePath.startsWith('/data/UserData/schwung/')) {
+            throw new Error('Path must be within /data/UserData/schwung/');
         }
         const hostIp = cachedDeviceIp || hostname;
         await sshExecWithRetry(hostIp, `rm -rf "${remotePath}"`);
@@ -1813,9 +1813,9 @@ async function deleteRemotePath(hostname, remotePath) {
 
 async function createRemoteDir(hostname, remotePath) {
     try {
-        // Validate path is within move-anything directory
-        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
-            throw new Error('Path must be within /data/UserData/move-anything/');
+        // Validate path is within schwung directory
+        if (!remotePath.startsWith('/data/UserData/schwung/')) {
+            throw new Error('Path must be within /data/UserData/schwung/');
         }
         const hostIp = cachedDeviceIp || hostname;
         await sshExecWithRetry(hostIp, `mkdir -p "${remotePath}"`);
@@ -1829,19 +1829,19 @@ async function createRemoteDir(hostname, remotePath) {
 async function checkCoreInstallation(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
-        console.log('[DEBUG] Checking if Move Everything is installed...');
+        console.log('[DEBUG] Checking if Schwung is installed...');
 
-        // Quick check: is Move Everything installed?
-        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
+        // Quick check: is Schwung installed?
+        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung && echo "installed" || echo "not_installed"');
         if (installCheck.trim() === 'not_installed') {
-            console.log('[DEBUG] Move Everything not installed');
+            console.log('[DEBUG] Schwung not installed');
             return { installed: false, core: null };
         }
 
         // Get core version only
         let coreVersion = null;
         try {
-            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/host/version.txt 2>/dev/null || cat /data/UserData/schwung/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
@@ -1867,7 +1867,7 @@ async function checkShimActive(hostname) {
             const runtimeProbe = "pid=\\$(pidof MoveOriginal 2>/dev/null | awk '{print \\$1}'); " +
                 "if [ -z \"\\$pid\" ]; then pid=\\$(pidof Move 2>/dev/null | awk '{print \\$1}'); fi; " +
                 "if [ -z \"\\$pid\" ]; then echo \"no_process\"; " +
-                "elif grep -q \"move-anything-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
+                "elif grep -q \"schwung-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
                 "else echo \"inactive\"; fi";
             runtimeState = (await sshExecWithRetry(hostIp, runtimeProbe, { username: 'root' })).trim();
             console.log('[DEBUG] Shim runtime probe:', runtimeState);
@@ -1943,46 +1943,46 @@ async function checkShimActive(hostname) {
 async function reenableMoveEverything(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
-        console.log('[DEBUG] Re-enabling Move Everything (root partition operations only)...');
+        console.log('[DEBUG] Re-enabling Schwung (root partition operations only)...');
 
         // Verify data partition payload is intact
-        const shimCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "missing"');
+        const shimCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/schwung/schwung-shim.so && echo "ok" || echo "missing"');
         if (shimCheck.trim() !== 'ok') {
             throw new Error('Shim not found on data partition. Run a full install instead.');
         }
-        const entrypointCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/shim-entrypoint.sh && echo "ok" || echo "missing"');
+        const entrypointCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/schwung/shim-entrypoint.sh && echo "ok" || echo "missing"');
         if (entrypointCheck.trim() !== 'ok') {
             throw new Error('Entrypoint not found on data partition. Run a full install instead.');
         }
 
         // Clean stale ld.so.preload entries
-        await sshExecWithRetry(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'move-anything-shim.so' /etc/ld.so.preload; then grep -v 'move-anything-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
+        await sshExecWithRetry(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'schwung-shim.so' /etc/ld.so.preload; then grep -v 'schwung-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
 
         // Copy shim to /usr/lib/ + setuid
         // NOTE: must be a real copy, not a symlink — glibc 2.35+ follows symlinks under
         // AT_SECURE (triggered by MoveOriginal's file capabilities) and rejects libraries
         // whose real path is on an untrusted filesystem like /data/UserData/
-        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so && cp /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'chmod u+s /usr/lib/move-anything-shim.so', { username: 'root' });
-        const setuidCheck = await sshExecWithRetry(hostIp, 'test -u /usr/lib/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/schwung-shim.so && cp /data/UserData/schwung/schwung-shim.so /usr/lib/schwung-shim.so', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod u+s /usr/lib/schwung-shim.so', { username: 'root' });
+        const setuidCheck = await sshExecWithRetry(hostIp, 'test -u /usr/lib/schwung-shim.so && echo "ok" || echo "no"', { username: 'root' });
         if (setuidCheck.trim() !== 'ok') {
             throw new Error('Shim setuid bit missing after chmod');
         }
 
         // Web shim symlink if present
-        const hasWebShim = await sshExecWithRetry(hostIp, 'test -f /data/UserData/move-anything/move-anything-web-shim.so && echo "yes" || echo "no"');
+        const hasWebShim = await sshExecWithRetry(hostIp, 'test -f /data/UserData/schwung/schwung-web-shim.so && echo "yes" || echo "no"');
         if (hasWebShim.trim() === 'yes') {
-            await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-web-shim.so && ln -s /data/UserData/move-anything/move-anything-web-shim.so /usr/lib/move-anything-web-shim.so', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'rm -f /usr/lib/schwung-web-shim.so && ln -s /data/UserData/schwung/schwung-web-shim.so /usr/lib/schwung-web-shim.so', { username: 'root' });
         }
 
         // TTS library symlinks if present
-        const hasLib = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
+        const hasLib = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung/lib && echo "yes" || echo "no"');
         if (hasLib.trim() === 'yes') {
-            await sshExecWithRetry(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/move-anything/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'cd /data/UserData/schwung/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/schwung/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
         }
 
         // Ensure entrypoint is executable
-        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/move-anything/shim-entrypoint.sh', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/schwung/shim-entrypoint.sh', { username: 'root' });
 
         // Backup original Move binary if MoveOriginal doesn't exist
         const hasMoveOriginal = await sshExecWithRetry(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' });
@@ -1992,7 +1992,7 @@ async function reenableMoveEverything(hostname) {
         }
 
         // Install shimmed entrypoint
-        await sshExecWithRetry(hostIp, 'cp /data/UserData/move-anything/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'cp /data/UserData/schwung/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
 
         // MoveWebService wrapper if web shim present
         if (hasWebShim.trim() === 'yes') {
@@ -2003,7 +2003,7 @@ async function reenableMoveEverything(hostname) {
                     if (hasOriginal.trim() !== 'yes') {
                         await sshExecWithRetry(hostIp, `mv ${webSvcPath} ${webSvcPath}Original`, { username: 'root' });
                     }
-                    await sshExecWithRetry(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/move-anything/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/move-anything-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
+                    await sshExecWithRetry(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/schwung/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/schwung-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
                 }
             } catch (err) {
                 console.log('[DEBUG] Web service wrapper setup failed (non-fatal):', err.message);
@@ -2013,7 +2013,7 @@ async function reenableMoveEverything(hostname) {
         // Stop and restart Move service
         console.log('[DEBUG] Restarting Move service...');
         await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
         await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
         await sshExecWithRetry(hostIp, 'pids=\\$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -2040,7 +2040,7 @@ async function reenableMoveEverything(hostname) {
         for (let i = 0; i < 30; i++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             try {
-                const check = await sshExec(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "move-anything-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
+                const check = await sshExec(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "schwung-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
                 if (check.trim() === 'ok') {
                     shimOk = true;
                     break;
@@ -2067,10 +2067,10 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
         const hostIp = cachedDeviceIp || hostname;
         console.log('[DEBUG] Checking installed versions on device...');
 
-        // Check if Move Everything is installed
-        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/move-anything && echo "installed" || echo "not_installed"');
+        // Check if Schwung is installed
+        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung && echo "installed" || echo "not_installed"');
         if (installCheck.trim() === 'not_installed') {
-            console.log('[DEBUG] Move Everything not installed on device');
+            console.log('[DEBUG] Schwung not installed on device');
             return {
                 installed: false,
                 core: null,
@@ -2082,7 +2082,7 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
         let coreVersion = null;
         try {
             if (progressCallback) progressCallback('Checking core version...');
-            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/host/version.txt 2>/dev/null || cat /data/UserData/schwung/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
@@ -2099,7 +2099,7 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
             // Uses -exec directly (no shell variables) to avoid quoting issues with sshExec
             const DELIM = '___MODULE_BOUNDARY___';
             const batchOutput = await sshExecWithRetry(hostIp,
-                'find /data/UserData/move-anything/modules -name module.json -type f -exec cat {} \\; -exec echo ___MODULE_BOUNDARY___ \\;'
+                'find /data/UserData/schwung/modules -name module.json -type f -exec cat {} \\; -exec echo ___MODULE_BOUNDARY___ \\;'
             );
 
             const chunks = batchOutput.split(DELIM).map(c => c.trim()).filter(c => c);
@@ -2227,7 +2227,7 @@ async function getScreenReaderStatus(hostname) {
         const hostIp = cachedDeviceIp || hostname;
 
         // Check for screen reader state file (used by tts_engine_flite.c)
-        const checkCmd = 'cat /data/UserData/move-anything/config/screen_reader_state.txt 2>/dev/null || echo "0"';
+        const checkCmd = 'cat /data/UserData/schwung/config/screen_reader_state.txt 2>/dev/null || echo "0"';
         const status = (await sshExecWithRetry(hostIp, checkCmd)).trim();
 
         return status === '1';
@@ -2243,17 +2243,17 @@ async function setScreenReaderState(hostname, enabled) {
         console.log('[DEBUG] Setting screen reader to:', enabled);
 
         // Ensure config directory exists
-        await sshExecWithRetry(hostIp, 'mkdir -p /data/UserData/move-anything/config');
+        await sshExecWithRetry(hostIp, 'mkdir -p /data/UserData/schwung/config');
 
         // Write state file (1 = enabled, 0 = disabled)
         const value = enabled ? '1' : '0';
-        await sshExecWithRetry(hostIp, `echo "${value}" > /data/UserData/move-anything/config/screen_reader_state.txt`);
+        await sshExecWithRetry(hostIp, `echo "${value}" > /data/UserData/schwung/config/screen_reader_state.txt`);
 
         // Restart Move via init service so it picks up the new state
         // (matches the restart sequence in install.sh)
         console.log('[DEBUG] Restarting Move...');
         await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
         await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
         await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -2273,7 +2273,7 @@ async function getStandaloneStatus(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
 
-        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/config/features.json 2>/dev/null || echo "{}"')).trim();
         const features = JSON.parse(featuresRaw);
         return features.standalone_enabled === true;
     } catch (err) {
@@ -2288,19 +2288,19 @@ async function setStandaloneState(hostname, enabled) {
         console.log('[DEBUG] Setting standalone to:', enabled);
 
         // Read existing features.json to preserve other settings
-        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/config/features.json 2>/dev/null || echo "{}"')).trim();
         const features = JSON.parse(featuresRaw);
         features.standalone_enabled = enabled;
 
         // Write updated features.json
         const featuresJson = JSON.stringify(features, null, 2);
-        await sshExecWithRetry(hostIp, `mkdir -p /data/UserData/move-anything/config`);
-        await sshExecWithRetry(hostIp, `cat > /data/UserData/move-anything/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
+        await sshExecWithRetry(hostIp, `mkdir -p /data/UserData/schwung/config`);
+        await sshExecWithRetry(hostIp, `cat > /data/UserData/schwung/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
 
         // Restart Move via init service so it picks up the new state
         console.log('[DEBUG] Restarting Move...');
         await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
         await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
         await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -2380,7 +2380,7 @@ async function removeModulePackage(moduleId, componentType, hostname) {
         console.log(`[DEBUG] Removing module ${moduleId} (${componentType}) from device`);
 
         const categoryPath = getInstallSubdir(componentType);
-        const modulePath = `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}`;
+        const modulePath = `/data/UserData/schwung/modules/${categoryPath}/${moduleId}`;
 
         // Verify the directory exists before removing
         const checkResult = await sshExecWithRetry(hostIp, `test -d "${modulePath}" && echo "exists" || echo "not_found"`);
@@ -2403,21 +2403,21 @@ async function fixPermissions(hostname) {
         const hostIp = cachedDeviceIp || hostname;
         console.log('[DEBUG] Fixing file permissions on device...');
 
-        // Ensure all files in move-anything are owned by ableton
+        // Ensure all files in schwung are owned by ableton
         // Use root to fix any files that may have been created with wrong ownership
-        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/move-anything/', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chown -R ableton:users /data/UserData/schwung/', { username: 'root' });
 
         // Fix ownership of UserLibrary paths created by root-running DSP plugins
         // (recordings, samples, track presets). Without this, tools like Wave Edit
         // can't cp/mv files written by the setuid shim.
-        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Samples/Move Everything' 2>/dev/null || true", { username: 'root' });
-        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Track Presets/Move Everything' 2>/dev/null || true", { username: 'root' });
+        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Samples/Schwung' 2>/dev/null || true", { username: 'root' });
+        await sshExecWithRetry(hostIp, "chown -R ableton:users '/data/UserData/UserLibrary/Track Presets/Schwung' 2>/dev/null || true", { username: 'root' });
 
         // Ensure shim has setuid bit (critical for LD_PRELOAD to work)
-        await sshExecWithRetry(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod u+s /data/UserData/schwung/schwung-shim.so', { username: 'root' });
 
         // Ensure executables are executable
-        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/move-anything/move-anything /data/UserData/move-anything/shim-entrypoint.sh /data/UserData/move-anything/start.sh /data/UserData/move-anything/stop.sh', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/schwung/schwung /data/UserData/schwung/shim-entrypoint.sh /data/UserData/schwung/start.sh /data/UserData/schwung/stop.sh', { username: 'root' });
 
         console.log('[DEBUG] Permissions fixed');
         return { success: true };
@@ -2430,21 +2430,21 @@ async function fixPermissions(hostname) {
 async function uninstallMoveEverything(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
-        console.log('[DEBUG] Uninstalling Move Everything from:', hostIp);
+        console.log('[DEBUG] Uninstalling Schwung from:', hostIp);
 
         const asRoot = { username: 'root' };
 
-        // Stop move-anything service
-        console.log('[DEBUG] Stopping move-anything service...');
-        await sshExecWithRetry(hostIp, 'systemctl stop move-anything 2>/dev/null || killall move-anything 2>/dev/null || true', asRoot);
+        // Stop schwung service
+        console.log('[DEBUG] Stopping schwung service...');
+        await sshExecWithRetry(hostIp, 'systemctl stop schwung 2>/dev/null || killall schwung 2>/dev/null || true', asRoot);
 
         // Remove shim from /usr/lib if it exists
         console.log('[DEBUG] Removing shim library...');
-        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/move-anything-shim.so', asRoot);
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/schwung-shim.so', asRoot);
 
-        // Remove Move Everything directory
-        console.log('[DEBUG] Removing Move Everything files...');
-        await sshExecWithRetry(hostIp, 'rm -rf /data/UserData/move-anything', asRoot);
+        // Remove Schwung directory
+        console.log('[DEBUG] Removing Schwung files...');
+        await sshExecWithRetry(hostIp, 'rm -rf /data/UserData/schwung', asRoot);
 
         // Restore original Move binary if backup exists
         console.log('[DEBUG] Restoring original Move binary...');
@@ -2469,7 +2469,7 @@ async function uninstallMoveEverything(hostname) {
         console.log('[DEBUG] Uninstall complete');
         return {
             success: true,
-            message: 'Move Everything has been uninstalled. Your Move is restarting and will boot to stock firmware.'
+            message: 'Schwung has been uninstalled. Your Move is restarting and will boot to stock firmware.'
         };
     } catch (err) {
         console.error('[DEBUG] Uninstall error:', err.message);

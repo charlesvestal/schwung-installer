@@ -42,29 +42,29 @@ npm run tauri:build
 codesign --deep --force --verify --verbose \
   --sign "Developer ID Application: Your Name (TEAM_ID)" \
   --options runtime \
-  "src-tauri/target/release/bundle/macos/Move Everything Installer.app"
+  "src-tauri/target/release/bundle/macos/Schwung Installer.app"
 
 # 3. Create DMG (Tauri does this automatically, but you can customize)
-hdiutil create -volname "Move Everything Installer" \
-  -srcfolder "src-tauri/target/release/bundle/macos/Move Everything Installer.app" \
-  -ov -format UDZO "Move Everything Installer.dmg"
+hdiutil create -volname "Schwung Installer" \
+  -srcfolder "src-tauri/target/release/bundle/macos/Schwung Installer.app" \
+  -ov -format UDZO "Schwung Installer.dmg"
 
 # 4. Sign the DMG
 codesign --sign "Developer ID Application: Your Name (TEAM_ID)" \
-  "Move Everything Installer.dmg"
+  "Schwung Installer.dmg"
 
 # 5. Notarize (submit to Apple)
-xcrun notarytool submit "Move Everything Installer.dmg" \
+xcrun notarytool submit "Schwung Installer.dmg" \
   --apple-id "your@email.com" \
   --team-id "TEAM_ID" \
   --password "app-specific-password" \
   --wait
 
 # 6. Staple notarization ticket (attaches approval to DMG)
-xcrun stapler staple "Move Everything Installer.dmg"
+xcrun stapler staple "Schwung Installer.dmg"
 
 # 7. Verify
-spctl -a -vvv -t install "Move Everything Installer.dmg"
+spctl -a -vvv -t install "Schwung Installer.dmg"
 # Should show: "accepted"
 ```
 
@@ -100,7 +100,7 @@ spctl -a -vvv -t install "Move Everything Installer.dmg"
     <!-- Keychain access -->
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)com.move-everything.installer</string>
+        <string>$(AppIdentifierPrefix)com.schwung.installer</string>
     </array>
 </dict>
 </plist>
@@ -171,7 +171,7 @@ jobs:
         run: |
           # Submit for notarization
           xcrun notarytool submit \
-            "installer/src-tauri/target/release/bundle/dmg/Move Everything Installer.dmg" \
+            "installer/src-tauri/target/release/bundle/dmg/Schwung Installer.dmg" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_ID_PASSWORD" \
@@ -179,12 +179,12 @@ jobs:
 
           # Staple ticket
           xcrun stapler staple \
-            "installer/src-tauri/target/release/bundle/dmg/Move Everything Installer.dmg"
+            "installer/src-tauri/target/release/bundle/dmg/Schwung Installer.dmg"
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v1
         with:
-          files: installer/src-tauri/target/release/bundle/dmg/Move Everything Installer.dmg
+          files: installer/src-tauri/target/release/bundle/dmg/Schwung Installer.dmg
 ```
 
 **GitHub Secrets to configure:**
@@ -224,10 +224,10 @@ npm run tauri:build
 
 # 2. Sign the .msi installer
 signtool sign /f "certificate.pfx" /p "password" /t http://timestamp.digicert.com `
-  "src-tauri\target\release\bundle\msi\Move Everything Installer.msi"
+  "src-tauri\target\release\bundle\msi\Schwung Installer.msi"
 
 # 3. Verify signature
-signtool verify /pa "src-tauri\target\release\bundle\msi\Move Everything Installer.msi"
+signtool verify /pa "src-tauri\target\release\bundle\msi\Schwung Installer.msi"
 ```
 
 #### Option 2: Automatic Signing in Tauri
@@ -305,12 +305,12 @@ jobs:
             /f ..\certificate.pfx `
             /p $env:WINDOWS_CERTIFICATE_PWD `
             /t http://timestamp.digicert.com `
-            src-tauri\target\release\bundle\msi\Move Everything Installer.msi
+            src-tauri\target\release\bundle\msi\Schwung Installer.msi
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v1
         with:
-          files: installer/src-tauri/target/release/bundle/msi/Move Everything Installer.msi
+          files: installer/src-tauri/target/release/bundle/msi/Schwung Installer.msi
 ```
 
 **GitHub Secrets:**
@@ -380,10 +380,10 @@ jobs:
 
 ```bash
 # Check signature
-codesign -vvv --deep --strict "Move Everything Installer.app"
+codesign -vvv --deep --strict "Schwung Installer.app"
 
 # Check notarization
-spctl -a -vvv -t install "Move Everything Installer.dmg"
+spctl -a -vvv -t install "Schwung Installer.dmg"
 
 # Should show:
 # - "signed by Developer ID Application: Your Name"
@@ -395,7 +395,7 @@ spctl -a -vvv -t install "Move Everything Installer.dmg"
 
 ```powershell
 # Check signature
-signtool verify /pa "Move Everything Installer.msi"
+signtool verify /pa "Schwung Installer.msi"
 
 # Should show:
 # - "Successfully verified"
