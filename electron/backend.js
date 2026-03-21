@@ -2269,53 +2269,6 @@ async function setScreenReaderState(hostname, enabled) {
     }
 }
 
-async function getStandaloneStatus(hostname) {
-    try {
-        const hostIp = cachedDeviceIp || hostname;
-
-        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/config/features.json 2>/dev/null || echo "{}"')).trim();
-        const features = JSON.parse(featuresRaw);
-        return features.standalone_enabled === true;
-    } catch (err) {
-        console.log('[DEBUG] Could not read standalone status:', err.message);
-        return false;
-    }
-}
-
-async function setStandaloneState(hostname, enabled) {
-    try {
-        const hostIp = cachedDeviceIp || hostname;
-        console.log('[DEBUG] Setting standalone to:', enabled);
-
-        // Read existing features.json to preserve other settings
-        const featuresRaw = (await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/config/features.json 2>/dev/null || echo "{}"')).trim();
-        const features = JSON.parse(featuresRaw);
-        features.standalone_enabled = enabled;
-
-        // Write updated features.json
-        const featuresJson = JSON.stringify(features, null, 2);
-        await sshExecWithRetry(hostIp, `mkdir -p /data/UserData/schwung/config`);
-        await sshExecWithRetry(hostIp, `cat > /data/UserData/schwung/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
-
-        // Restart Move via init service so it picks up the new state
-        console.log('[DEBUG] Restarting Move...');
-        await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        await sshExecWithRetry(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
-
-        return {
-            enabled: enabled,
-            message: `Standalone mode ${enabled ? 'enabled' : 'disabled'}. Move is restarting.`
-        };
-    } catch (err) {
-        console.error('[DEBUG] Standalone toggle error:', err.message);
-        throw new Error(`Failed to set standalone state: ${err.message}`);
-    }
-}
-
 async function uploadModuleAssets(localPaths, remoteDir, hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
@@ -2948,8 +2901,6 @@ module.exports = {
     getDiagnostics,
     getScreenReaderStatus,
     setScreenReaderState,
-    getStandaloneStatus,
-    setStandaloneState,
     uninstallMoveEverything,
     testSshFormats,
     cleanDeviceTmp,

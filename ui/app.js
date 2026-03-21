@@ -51,7 +51,6 @@ const state = {
     installType: 'complete',
     selectedModules: [],
     enableScreenReader: false,
-    enableStandalone: false,
     sshPassword: null,
     errors: [],
     versionInfo: null,
@@ -727,12 +726,6 @@ function setupInstallationOptions() {
     // Handle screen reader checkbox
     screenReaderCheckbox.addEventListener('change', (e) => {
         state.enableScreenReader = e.target.checked;
-    });
-
-    // Handle standalone checkbox
-    const standaloneCheckbox = document.getElementById('enable-standalone');
-    standaloneCheckbox.addEventListener('change', (e) => {
-        state.enableStandalone = e.target.checked;
     });
 
     // Initialize
@@ -2082,9 +2075,6 @@ async function startInstallation() {
 
             // Determine installation flags based on mode
             const installFlags = [];
-            if (!state.enableStandalone) {
-                installFlags.push('--disable-standalone');
-            }
             if (state.enableScreenReader) {
                 installFlags.push('--enable-screen-reader');
             }
@@ -2209,9 +2199,6 @@ function populateSuccessScreen(options = {}) {
     html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Track</strong> or <strong style="color: #0066cc;">Shift + Vol + Menu</strong> &mdash; Access track and master slots</li>';
     html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Jog Click</strong> &mdash; Access overtake modules</li>';
 
-    if (state.enableStandalone) {
-        html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Knob 8</strong> &mdash; Enter standalone mode</li>';
-    }
 
     if (state.enableScreenReader) {
         html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Menu</strong> &mdash; Toggle screen reader on and off</li>';
@@ -2833,51 +2820,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    document.getElementById('link-standalone').onclick = async (e) => {
-        e.preventDefault();
-        const link = e.target;
-        const originalText = link.textContent;
-        try {
-            const hostname = state.deviceIp;
-
-            link.textContent = 'Checking...';
-            link.style.pointerEvents = 'none';
-
-            const currentStatus = await window.installer.invoke('get_standalone_status', { hostname });
-
-            const action = currentStatus ? 'disable' : 'enable';
-            const confirmMsg = currentStatus
-                ? 'Standalone mode is currently enabled. Disable it?'
-                : 'Enable standalone mode?\n\nStandalone mode contains developer-focused features and does not interact with regular Move operation.';
-
-            if (!confirm(confirmMsg)) {
-                link.textContent = originalText;
-                link.style.pointerEvents = '';
-                return;
-            }
-
-            link.textContent = `${action === 'enable' ? 'Enabling' : 'Disabling'}...`;
-
-            const result = await window.installer.invoke('set_standalone_state', {
-                hostname,
-                enabled: !currentStatus
-            });
-
-            link.textContent = result.message || 'Done';
-            setTimeout(() => {
-                link.textContent = originalText;
-                link.style.pointerEvents = '';
-            }, 2000);
-        } catch (error) {
-            console.error('Failed to toggle standalone mode:', error);
-            link.textContent = 'Failed';
-            setTimeout(() => {
-                link.textContent = originalText;
-                link.style.pointerEvents = '';
-            }, 2000);
-        }
-    };
-
     document.getElementById('btn-reenable').onclick = async (e) => {
         e.preventDefault();
         if (!confirm('Re-enable Schwung?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.')) return;
@@ -2969,7 +2911,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             updateInstallProgress('Reinstalling Schwung core...', 20);
             const installFlags = [];
-            if (!state.enableStandalone) installFlags.push('--disable-standalone');
             if (state.enableScreenReader) installFlags.push('--enable-screen-reader');
 
             await window.installer.invoke('install_main', {
