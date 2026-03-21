@@ -1831,17 +1831,20 @@ async function checkCoreInstallation(hostname) {
         const hostIp = cachedDeviceIp || hostname;
         console.log('[DEBUG] Checking if Schwung is installed...');
 
-        // Quick check: is Schwung installed?
-        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung && echo "installed" || echo "not_installed"');
+        // Quick check: is Schwung (or old move-anything) installed?
+        const installCheck = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung && echo "schwung" || (test -d /data/UserData/move-anything && echo "move-anything") || echo "not_installed"');
         if (installCheck.trim() === 'not_installed') {
             console.log('[DEBUG] Schwung not installed');
             return { installed: false, core: null };
         }
 
+        const dataDir = installCheck.trim() === 'move-anything' ? '/data/UserData/move-anything' : '/data/UserData/schwung';
+        console.log('[DEBUG] Found installation at:', dataDir);
+
         // Get core version only
         let coreVersion = null;
         try {
-            const versionOutput = await sshExecWithRetry(hostIp, 'cat /data/UserData/schwung/host/version.txt 2>/dev/null || cat /data/UserData/schwung/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExecWithRetry(hostIp, `cat ${dataDir}/host/version.txt 2>/dev/null || cat ${dataDir}/version.txt 2>/dev/null || echo ""`);
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
@@ -1867,7 +1870,7 @@ async function checkShimActive(hostname) {
             const runtimeProbe = "pid=\\$(pidof MoveOriginal 2>/dev/null | awk '{print \\$1}'); " +
                 "if [ -z \"\\$pid\" ]; then pid=\\$(pidof Move 2>/dev/null | awk '{print \\$1}'); fi; " +
                 "if [ -z \"\\$pid\" ]; then echo \"no_process\"; " +
-                "elif grep -q \"schwung-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
+                "elif grep -q \"schwung-shim.so\\|move-anything-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
                 "else echo \"inactive\"; fi";
             runtimeState = (await sshExecWithRetry(hostIp, runtimeProbe, { username: 'root' })).trim();
             console.log('[DEBUG] Shim runtime probe:', runtimeState);
