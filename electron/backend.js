@@ -21,8 +21,16 @@ const cookieStore = path.join(os.homedir(), '.schwung-installer-cookie');
 // Store reference to main window for logging
 let mainWindowForLogging = null;
 
+// Electron's net module (set from main.js) — uses Chromium's network stack,
+// which properly integrates with macOS Local Network Privacy prompts.
+let electronNet = null;
+
 function setMainWindow(win) {
     mainWindowForLogging = win;
+}
+
+function setElectronNet(net) {
+    electronNet = net;
 }
 
 // Override console.log to also send to renderer
@@ -196,24 +204,116 @@ async function validateDevice(baseUrl) {
                             throw new Error('All Windows resolution methods failed');
                         }
                     } else {
-                            // macOS/Linux: Use system resolver to get IPv4
-                            const { stdout } = await new Promise((resolve, reject) => {
-                                const cmd = process.platform === 'darwin'
-                                    ? `dscacheutil -q host -a name ${hostname} | grep ip_address | head -1 | awk '{print $2}'`
-                                    : `getent ahostsv4 ${hostname} | head -1 | awk '{print $1}'`;
+                            // macOS/Linux: Try multiple resolution methods
+                            const { exec: execCb } = require('child_process');
+                            const execAsync = require('util').promisify(execCb);
 
-                                require('child_process').exec(cmd, (err, stdout, stderr) => {
-                                    if (err) reject(err);
-                                    else resolve({ stdout });
-                                });
-                            });
+                            const resolvers = [];
 
-                            const ip = stdout.trim();
-                            if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
-                                cachedDeviceIp = ip;
-                                console.log(`[DEBUG] Resolved ${hostname} to ${cachedDeviceIp} (IPv4)`);
+                            if (process.platform === 'darwin') {
+                                resolvers.push(
+                                    {
+                                        name: 'dns.lookup',
+                                        fn: async () => {
+                                            return new Promise((resolve, reject) => {
+                                                const timer = setTimeout(() => reject(new Error('dns.lookup timed out')), 5000);
+                                                dns.lookup(hostname, { family: 4 }, (err, address) => {
+                                                    clearTimeout(timer);
+                                                    if (err) reject(err);
+                                                    else resolve(address);
+                                                });
+                                            });
+                                        }
+                                    },
+                                    {
+                                        name: 'dscacheutil',
+                                        fn: async () => {
+                                            const { stdout } = await execAsync(
+                                                `dscacheutil -q host -a name ${hostname} | grep ip_address | head -1 | awk '{print $2}'`,
+                                                { timeout: 5000 }
+                                            );
+                                            const ip = stdout.trim();
+                                            if (!ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) throw new Error('No IPv4 from dscacheutil');
+                                            return ip;
+                                        }
+                                    },
+                                    {
+                                        name: 'dns-sd',
+                                        fn: async () => {
+                                            const { spawn } = require('child_process');
+                                            return new Promise((resolve, reject) => {
+                                                const proc = spawn('dns-sd', ['-G', 'v4', hostname]);
+                                                let output = '';
+                                                const timeout = setTimeout(() => {
+                                                    proc.kill();
+                                                    reject(new Error('dns-sd timed out'));
+                                                }, 5000);
+                                                proc.stdout.on('data', (data) => {
+                                                    output += data.toString();
+                                                    const ipMatch = output.match(/\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\s\r\n]/);
+                                                    if (ipMatch) {
+                                                        clearTimeout(timeout);
+                                                        proc.kill();
+                                                        resolve(ipMatch[1]);
+                                                    }
+                                                });
+                                                proc.on('error', (err) => {
+                                                    clearTimeout(timeout);
+                                                    reject(err);
+                                                });
+                                            });
+                                        }
+                                    }
+                                );
                             } else {
-                                throw new Error('No IPv4 address found');
+                                // Linux
+                                resolvers.push(
+                                    {
+                                        name: 'dns.lookup',
+                                        fn: async () => {
+                                            return new Promise((resolve, reject) => {
+                                                const timer = setTimeout(() => reject(new Error('dns.lookup timed out')), 5000);
+                                                dns.lookup(hostname, { family: 4 }, (err, address) => {
+                                                    clearTimeout(timer);
+                                                    if (err) reject(err);
+                                                    else resolve(address);
+                                                });
+                                            });
+                                        }
+                                    },
+                                    {
+                                        name: 'getent',
+                                        fn: async () => {
+                                            const { stdout } = await execAsync(
+                                                `getent ahostsv4 ${hostname} | head -1 | awk '{print $1}'`,
+                                                { timeout: 5000 }
+                                            );
+                                            const ip = stdout.trim();
+                                            if (!ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) throw new Error('No IPv4 from getent');
+                                            return ip;
+                                        }
+                                    }
+                                );
+                            }
+
+                            let resolved = false;
+                            for (const resolver of resolvers) {
+                                try {
+                                    console.log(`[DEBUG] ${process.platform}: Trying ${resolver.name} to resolve ${hostname}...`);
+                                    const ip = await resolver.fn();
+                                    if (ip) {
+                                        cachedDeviceIp = ip;
+                                        console.log(`[DEBUG] Resolved ${hostname} to ${cachedDeviceIp} via ${resolver.name}`);
+                                        resolved = true;
+                                        break;
+                                    }
+                                } catch (resolverErr) {
+                                    console.log(`[DEBUG] ${resolver.name} failed: ${resolverErr.message}`);
+                                }
+                            }
+
+                            if (!resolved) {
+                                throw new Error(`All ${process.platform} resolution methods failed`);
                             }
                         }
                 } catch (err) {
@@ -233,39 +333,98 @@ async function validateDevice(baseUrl) {
             if (!cachedDeviceIp && hostname.endsWith('.local')) {
                 console.log(`[DEBUG] Attempting to get IP from HTTP connection...`);
 
-                // Use Node's http module directly to access socket info
-                const http = require('http');
-                const connectedIp = await new Promise((resolve, reject) => {
-                    const req = http.get(validateUrl, { timeout: 10000 }, (res) => {
-                        const socketIp = res.socket.remoteAddress;
-                        console.log(`[DEBUG] HTTP connected to IP: ${socketIp}`);
-                        resolve(socketIp);
-                        res.resume(); // Consume response
+                if (electronNet && process.platform === 'darwin') {
+                    // Use Electron net on macOS (triggers LNP prompt)
+                    console.log(`[DEBUG] Using Electron net for .local resolution (macOS LNP)`);
+                    await new Promise((resolve, reject) => {
+                        const request = electronNet.request({
+                            method: 'GET',
+                            url: validateUrl,
+                        });
+                        const timer = setTimeout(() => {
+                            request.abort();
+                            reject(new Error('Electron net request timeout'));
+                        }, 10000);
+                        request.on('response', (response) => {
+                            console.log(`[DEBUG] HTTP validation successful (status: ${response.statusCode})`);
+                            clearTimeout(timer);
+                            response.on('data', () => {}); // consume
+                            response.on('end', () => resolve());
+                        });
+                        request.on('error', (err) => {
+                            clearTimeout(timer);
+                            reject(err);
+                        });
+                        request.end();
                     });
-                    req.on('error', reject);
-                    req.on('timeout', () => reject(new Error('HTTP connection timeout')));
-                });
+                    // We validated but couldn't extract IP from Electron net —
+                    // the DNS resolvers above should have cached it already.
+                    // If not, subsequent operations will use the hostname directly.
+                } else {
+                    // Use Node's http module directly to access socket info
+                    const http = require('http');
+                    const connectedIp = await new Promise((resolve, reject) => {
+                        const req = http.get(validateUrl, { timeout: 10000 }, (res) => {
+                            const socketIp = res.socket.remoteAddress;
+                            console.log(`[DEBUG] HTTP connected to IP: ${socketIp}`);
+                            resolve(socketIp);
+                            res.resume(); // Consume response
+                        });
+                        req.on('error', reject);
+                        req.on('timeout', () => reject(new Error('HTTP connection timeout')));
+                    });
 
-                if (connectedIp) {
-                    // Clean up IPv6 formatting if needed (remove ::ffff: prefix)
-                    let cleanIp = connectedIp.replace(/^::ffff:/, '');
-                    cachedDeviceIp = cleanIp;
-                    console.log(`[DEBUG] Cached IP from HTTP connection: ${cachedDeviceIp}`);
+                    if (connectedIp) {
+                        // Clean up IPv6 formatting if needed (remove ::ffff: prefix)
+                        let cleanIp = connectedIp.replace(/^::ffff:/, '');
+                        cachedDeviceIp = cleanIp;
+                        console.log(`[DEBUG] Cached IP from HTTP connection: ${cachedDeviceIp}`);
+                    }
                 }
+            } else if (electronNet && process.platform === 'darwin') {
+                // Use Electron's net module on macOS — it uses Chromium's network stack
+                // which properly triggers the Local Network Privacy permission prompt.
+                // Node.js http/axios bypass Apple's Network framework and the prompt
+                // never appears, silently blocking local network connections.
+                console.log(`[DEBUG] Using Electron net module for macOS LNP compatibility`);
+                await new Promise((resolve, reject) => {
+                    const request = electronNet.request({
+                        method: 'GET',
+                        url: validateUrl,
+                    });
+                    const timer = setTimeout(() => {
+                        request.abort();
+                        reject(new Error('Electron net request timeout'));
+                    }, 10000);
+                    request.on('response', (response) => {
+                        console.log(`[DEBUG] HTTP validation successful (status: ${response.statusCode})`);
+                        clearTimeout(timer);
+                        response.on('data', () => {}); // consume
+                        response.on('end', () => resolve());
+                    });
+                    request.on('error', (err) => {
+                        clearTimeout(timer);
+                        reject(err);
+                    });
+                    request.end();
+                });
             } else {
-                // Just validate normally
+                // Just validate normally (non-macOS or no electron net available)
                 const response = await httpClient.get(validateUrl, { timeout: 10000 });
-                console.log(`[DEBUG] HTTP validation successful`);
+                console.log(`[DEBUG] HTTP validation successful (status: ${response.status})`);
             }
 
             return true;
         } catch (err) {
-            console.log(`[DEBUG] HTTP validation failed: ${err.message}`);
-            return false;
+            const errCode = err.code || 'unknown';
+            const errMsg = err.message || 'unknown error';
+            console.log(`[DEBUG] HTTP validation failed: ${errMsg} (code: ${errCode})`);
+            if (err.cause) console.log(`[DEBUG] HTTP validation cause: ${err.cause.message || err.cause}`);
+            return { valid: false, error: `Connection failed: ${errCode === 'unknown' ? errMsg : errCode}` };
         }
     } catch (err) {
         console.error('Device validation error:', err.message);
-        return false;
+        return { valid: false, error: err.message };
     }
 }
 
@@ -2872,6 +3031,7 @@ async function wifiEnableRadio(hostname) {
 
 module.exports = {
     setMainWindow,
+    setElectronNet,
     validateDevice,
     getSavedCookie,
     clearSavedCookie,
