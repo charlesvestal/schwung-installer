@@ -145,6 +145,25 @@ ipcMain.handle('remove_module', async (event, { moduleId, componentType, hostnam
     return await backend.removeModulePackage(moduleId, componentType, hostname);
 });
 
+ipcMain.handle('install_custom_module', async (event, { source, hostname }) => {
+    return await backend.installCustomModule(source, hostname);
+});
+
+ipcMain.handle('pick_tarball', async () => {
+    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select Module Tarball',
+        properties: ['openFile'],
+        filters: [
+            { name: 'Tarballs', extensions: ['gz', 'tgz'] },
+            { name: 'All Files', extensions: ['*'] }
+        ]
+    });
+    if (canceled || filePaths.length === 0) {
+        return { canceled: true };
+    }
+    return { canceled: false, filePath: filePaths[0] };
+});
+
 ipcMain.handle('pick_asset_files', async (event, { extensions, label, allowFolders }) => {
     const filters = [];
     if (extensions && extensions.length > 0) {

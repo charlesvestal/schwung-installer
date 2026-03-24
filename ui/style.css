@@ -1316,6 +1316,96 @@ button.secondary:hover {
     background: #e0aa44;
 }
 
+/* Custom Module Modal */
+.custom-module-modal-content {
+    max-width: 520px;
+}
+
+.custom-module-body {
+    padding: 1.25rem;
+}
+
+.custom-module-hint {
+    margin: 0 0 0.75rem 0;
+    color: #aaa;
+    font-size: 0.9rem;
+}
+
+.custom-module-input-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.custom-module-input-row input {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    background: #111;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.custom-module-input-row input:focus {
+    outline: none;
+    border-color: #e0aa44;
+}
+
+.custom-module-input-row button {
+    white-space: nowrap;
+}
+
+.custom-module-examples {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: #666;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.custom-module-examples span {
+    color: #888;
+}
+
+.custom-module-examples code {
+    background: #111;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    color: #999;
+    font-size: 0.78rem;
+}
+
+.custom-module-status {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.custom-module-status.installing {
+    background: #1a2a1a;
+    color: #aad4aa;
+}
+
+.custom-module-status.error {
+    background: #2a1a1a;
+    color: #d4aaaa;
+}
+
+.custom-module-status.success {
+    background: #1a2a1a;
+    color: #88cc88;
+}
+
+.custom-module-actions {
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid #333;
+    display: flex;
+    justify-content: flex-end;
+}
+
 /* WiFi Manager Modal */
 .wifi-modal-content {
     max-width: 480px;

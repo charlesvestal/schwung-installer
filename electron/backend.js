@@ -2916,5 +2916,160 @@ module.exports = {
     wifiConnect,
     wifiDisconnect,
     wifiRemoveService,
-    wifiEnableRadio
+    wifiEnableRadio,
+    installCustomModule
 };
+
+/**
+ * Install a custom (unlisted) module from various source formats:
+ * - Local tarball path: /path/to/module.tar.gz
+ * - GitHub user/repo: fetches latest release
+ * - GitHub user/repo/branch: fetches module.json from that branch, latest release
+ * - Full GitHub URL: downloads directly
+ *
+ * Auto-detects component_type from module.json inside the repo or tarball.
+ */
+async function installCustomModule(source, hostname) {
+    const hostIp = cachedDeviceIp || hostname;
+    let tarballPath = null;
+    let tempFile = null;
+    let componentType = 'utility'; // fallback
+    let moduleId = null;
+    let moduleName = null;
+
+    try {
+        if (source.match(/\.(tar\.gz|tgz)$/i) && !source.startsWith('http')) {
+            // Local tarball
+            tarballPath = source;
+            // Try to detect component_type by inspecting tarball contents
+            const detected = await detectModuleInfoFromTarball(tarballPath);
+            if (detected.componentType) componentType = detected.componentType;
+            if (detected.moduleId) moduleId = detected.moduleId;
+            if (detected.moduleName) moduleName = detected.moduleName;
+        } else {
+            // Parse GitHub source
+            const ghInfo = parseGitHubSource(source);
+            if (!ghInfo) {
+                throw new Error('Could not parse source. Use user/repo, user/repo/branch, a GitHub URL, or a local .tar.gz path.');
+            }
+
+            let downloadUrl = ghInfo.downloadUrl;
+            let assetName = null;
+
+            if (!downloadUrl) {
+                // Query GitHub API for latest release to find the actual .tar.gz asset
+                console.log(`[DEBUG] Custom install: querying GitHub API for ${ghInfo.owner}/${ghInfo.repo} releases`);
+                const apiUrl = `https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/releases/latest`;
+                const releaseResponse = await httpClient.get(apiUrl, {
+                    headers: { 'Accept': 'application/vnd.github.v3+json' }
+                });
+
+                if (releaseResponse.status !== 200) {
+                    throw new Error(`No releases found for ${ghInfo.owner}/${ghInfo.repo} (HTTP ${releaseResponse.status})`);
+                }
+
+                const release = releaseResponse.data;
+                const assets = release.assets || [];
+                const tarAsset = assets.find(a => /\.(tar\.gz|tgz)$/i.test(a.name));
+
+                if (!tarAsset) {
+                    throw new Error(`No .tar.gz asset found in latest release of ${ghInfo.owner}/${ghInfo.repo}`);
+                }
+
+                downloadUrl = tarAsset.browser_download_url;
+                assetName = tarAsset.name;
+                console.log(`[DEBUG] Custom install: found release asset ${assetName}`);
+            }
+
+            // Try to fetch module.json from repo for metadata (optional, best-effort)
+            const branch = ghInfo.branch || 'main';
+            try {
+                const mjUrl = `https://raw.githubusercontent.com/${ghInfo.owner}/${ghInfo.repo}/${branch}/src/module.json`;
+                console.log(`[DEBUG] Custom install: fetching module.json from ${mjUrl}`);
+                const mjResponse = await httpClient.get(mjUrl);
+                if (mjResponse.status === 200) {
+                    const mj = typeof mjResponse.data === 'string' ? JSON.parse(mjResponse.data) : mjResponse.data;
+                    if (mj.component_type) componentType = mj.component_type;
+                    if (mj.id) moduleId = mj.id;
+                    if (mj.name) moduleName = mj.name;
+                    console.log(`[DEBUG] Custom install: detected component_type=${componentType}, id=${moduleId}`);
+                }
+            } catch (err) {
+                console.log(`[DEBUG] Custom install: could not fetch module.json: ${err.message}`);
+            }
+
+            if (!assetName) assetName = path.basename(new URL(downloadUrl).pathname);
+            console.log(`[DEBUG] Custom install: downloading from ${downloadUrl}`);
+            tempFile = path.join(os.tmpdir(), assetName);
+            await downloadRelease(downloadUrl, tempFile);
+            tarballPath = tempFile;
+
+            // Inspect the tarball for module.json to fill in any missing metadata
+            const detected = await detectModuleInfoFromTarball(tarballPath);
+            if (detected.componentType && componentType === 'utility') componentType = detected.componentType;
+            if (detected.moduleId && !moduleId) moduleId = detected.moduleId;
+            if (detected.moduleName && !moduleName) moduleName = detected.moduleName;
+        }
+
+        if (!moduleId) moduleId = 'custom-module';
+        if (!moduleName) moduleName = moduleId;
+
+        console.log(`[DEBUG] Custom install: installing ${moduleId} as ${componentType}`);
+        await installModulePackage(moduleId, tarballPath, componentType, hostname);
+
+        return { success: true, moduleId, moduleName, componentType };
+    } finally {
+        // Clean up temp file if we downloaded one
+        if (tempFile) {
+            try { fs.unlinkSync(tempFile); } catch {}
+        }
+    }
+}
+
+function parseGitHubSource(source) {
+    // Full GitHub URL: https://github.com/user/repo/releases/download/vX.Y.Z/asset.tar.gz
+    const releaseUrlMatch = source.match(/github\.com\/([^/]+)\/([^/]+)\/releases\/download\/[^/]+\/(.+\.tar\.gz)/);
+    if (releaseUrlMatch) {
+        return { owner: releaseUrlMatch[1], repo: releaseUrlMatch[2], downloadUrl: source };
+    }
+
+    // GitHub repo URL: https://github.com/user/repo
+    const repoUrlMatch = source.match(/github\.com\/([^/]+)\/([^/\s]+)/);
+    if (repoUrlMatch) {
+        return { owner: repoUrlMatch[1], repo: repoUrlMatch[2].replace(/\.git$/, '') };
+    }
+
+    // user/repo/branch
+    const slashMatch = source.match(/^([^/\s]+)\/([^/\s]+)\/([^/\s]+)$/);
+    if (slashMatch) {
+        return { owner: slashMatch[1], repo: slashMatch[2], branch: slashMatch[3] };
+    }
+
+    // user/repo
+    const simpleMatch = source.match(/^([^/\s]+)\/([^/\s]+)$/);
+    if (simpleMatch) {
+        return { owner: simpleMatch[1], repo: simpleMatch[2] };
+    }
+
+    return null;
+}
+
+async function detectModuleInfoFromTarball(tarballPath) {
+    const result = { componentType: null, moduleId: null, moduleName: null };
+    try {
+        // Use tar to list and extract module.json from the tarball
+        const { execSync } = require('child_process');
+        const listing = execSync(`tar -tzf "${tarballPath}" 2>/dev/null | head -20`, { encoding: 'utf-8' });
+        const moduleJsonEntry = listing.split('\n').find(l => l.endsWith('/module.json') || l === 'module.json');
+        if (moduleJsonEntry) {
+            const content = execSync(`tar -xzf "${tarballPath}" -O "${moduleJsonEntry}" 2>/dev/null`, { encoding: 'utf-8' });
+            const mj = JSON.parse(content);
+            if (mj.component_type) result.componentType = mj.component_type;
+            if (mj.id) result.moduleId = mj.id;
+            if (mj.name) result.moduleName = mj.name;
+        }
+    } catch (err) {
+        console.log(`[DEBUG] detectModuleInfoFromTarball: ${err.message}`);
+    }
+    return result;
+}

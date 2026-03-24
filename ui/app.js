@@ -1171,6 +1171,86 @@ function displayManagementModules() {
     } else {
         statusEl.style.display = 'none';
     }
+
+    // --- "Add Custom Module" button ---
+    let customBtnContainer = document.getElementById('custom-module-btn-container');
+    if (!customBtnContainer) {
+        customBtnContainer = document.createElement('div');
+        customBtnContainer.id = 'custom-module-btn-container';
+        customBtnContainer.style.cssText = 'margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;';
+        const customBtn = document.createElement('button');
+        customBtn.className = 'btn-action';
+        customBtn.textContent = 'Add Custom Module...';
+        customBtn.onclick = openCustomModuleModal;
+        customBtnContainer.appendChild(customBtn);
+    }
+    // Place after available-modules or installed-modules
+    const anchor = document.getElementById('available-modules');
+    anchor.parentNode.insertBefore(customBtnContainer, anchor.nextSibling);
+}
+
+// --- Custom Module Modal ---
+
+function openCustomModuleModal() {
+    const modal = document.getElementById('custom-module-modal');
+    const input = document.getElementById('custom-module-source');
+    const status = document.getElementById('custom-module-status');
+    input.value = '';
+    status.style.display = 'none';
+    status.textContent = '';
+    status.className = 'custom-module-status';
+    document.getElementById('custom-module-install').disabled = false;
+    modal.style.display = 'flex';
+    input.focus();
+}
+
+function closeCustomModuleModal() {
+    document.getElementById('custom-module-modal').style.display = 'none';
+}
+
+async function handleCustomModuleBrowse() {
+    const result = await window.installer.invoke('pick_tarball');
+    if (!result.canceled) {
+        document.getElementById('custom-module-source').value = result.filePath;
+    }
+}
+
+async function handleCustomModuleInstall() {
+    const input = document.getElementById('custom-module-source');
+    const status = document.getElementById('custom-module-status');
+    const installBtn = document.getElementById('custom-module-install');
+    const source = input.value.trim();
+
+    if (!source) return;
+
+    status.style.display = 'block';
+    status.className = 'custom-module-status installing';
+    status.textContent = 'Installing...';
+    installBtn.disabled = true;
+
+    try {
+        const result = await window.installer.invoke('install_custom_module', {
+            source,
+            hostname: state.deviceIp
+        });
+
+        status.className = 'custom-module-status success';
+        status.textContent = `Installed ${result.moduleName || result.moduleId} successfully.`;
+
+        // Refresh version info to show the newly installed module
+        setTimeout(async () => {
+            closeCustomModuleModal();
+            try {
+                const versionInfo = await window.installer.invoke('check_installed_versions', { hostname: state.deviceIp });
+                state.versionInfo = versionInfo;
+                displayManagementModules();
+            } catch {}
+        }, 1500);
+    } catch (error) {
+        status.className = 'custom-module-status error';
+        status.textContent = `Failed: ${error.message}`;
+        installBtn.disabled = false;
+    }
 }
 
 async function handleUpgradeCore() {
@@ -3050,10 +3130,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.target.id === 'asset-browser-modal') closeAssetBrowser();
     };
 
+    // Custom module modal events
+    document.getElementById('custom-module-close').onclick = closeCustomModuleModal;
+    document.getElementById('custom-module-browse').onclick = handleCustomModuleBrowse;
+    document.getElementById('custom-module-install').onclick = handleCustomModuleInstall;
+    document.getElementById('custom-module-modal').onclick = (e) => {
+        if (e.target.id === 'custom-module-modal') closeCustomModuleModal();
+    };
+    document.getElementById('custom-module-source').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleCustomModuleInstall();
+    });
+
     // Close modal on Escape key
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            if (wifiManager.open) closeWifiManager();
+            if (document.getElementById('custom-module-modal').style.display !== 'none') closeCustomModuleModal();
+            else if (wifiManager.open) closeWifiManager();
             else if (assetBrowser.open) closeAssetBrowser();
         }
     });

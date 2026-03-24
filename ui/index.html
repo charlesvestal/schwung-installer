@@ -244,6 +244,32 @@
                 <div id="asset-browser-status" class="asset-status"></div>
             </div>
         </div>
+        <!-- Custom Module Modal -->
+        <div id="custom-module-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-content custom-module-modal-content">
+                <div class="modal-header">
+                    <h2>Add Custom Module</h2>
+                    <button id="custom-module-close" class="modal-close-btn">&times;</button>
+                </div>
+                <div class="custom-module-body">
+                    <p class="custom-module-hint">Enter a GitHub source or browse for a local tarball:</p>
+                    <div class="custom-module-input-row">
+                        <input type="text" id="custom-module-source" placeholder="user/repo, user/repo/branch, or GitHub URL" autocomplete="off" spellcheck="false">
+                        <button id="custom-module-browse" class="btn-action">Browse...</button>
+                    </div>
+                    <div class="custom-module-examples">
+                        <span>Examples:</span>
+                        <code>charlesvestal/schwung-braids</code>
+                        <code>charlesvestal/schwung-braids/dev</code>
+                        <code>https://github.com/.../releases/download/v1.0/module.tar.gz</code>
+                    </div>
+                    <div id="custom-module-status" class="custom-module-status" style="display: none;"></div>
+                </div>
+                <div class="custom-module-actions">
+                    <button id="custom-module-install" class="btn-action btn-install-module">Install</button>
+                </div>
+            </div>
+        </div>
         <!-- WiFi Manager Modal -->
         <div id="wifi-modal" class="modal-overlay" style="display: none;">
             <div class="modal-content wifi-modal-content">
