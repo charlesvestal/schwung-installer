@@ -16,7 +16,7 @@
   },
   "keywords": [],
   "author": "Charles Vestal <charles@charlesvestal.com>",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "axios": "^1.6.7",
     "ssh2": "^1.15.0",
