@@ -15,7 +15,7 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [],
-  "author": "Charles Vestal <charles@charlesvestal.com>",
+  "author": "Charles Vestal <charles@charles.pizza>",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.7",
