@@ -107,7 +107,8 @@ async function startDeviceDiscovery() {
     // Try configured hostname directly
     try {
         const baseUrl = `http://${state.hostname}`;
-        const isValid = await window.installer.invoke('validate_device_at', { baseUrl });
+        const result = await window.installer.invoke('validate_device_at', { baseUrl });
+        const isValid = result === true || (result && result.valid !== false);
 
         if (isValid) {
             console.log('[DEBUG]', state.hostname, 'validated successfully');
@@ -119,13 +120,24 @@ async function startDeviceDiscovery() {
             }, 500);
             return;
         }
+
+        // Extract error detail if available
+        const errorDetail = (result && result.error) ? result.error : '';
+        if (errorDetail) {
+            console.error('[DEBUG]', state.hostname, 'validation failed:', errorDetail);
+        }
     } catch (error) {
         console.error('[DEBUG]', state.hostname, 'validation failed:', error);
     }
 
     // If hostname fails, show retry button and manual entry
+    const isMac = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Macintosh');
+    const lnpHint = isMac
+        ? `<p style="font-size: 0.85em; color: #888;">On macOS, check System Settings &gt; Privacy &amp; Security &gt; Local Network and make sure Schwung Installer is allowed.</p>`
+        : '';
     statusDiv.innerHTML = `<p style="color: orange;">Could not connect to ${state.hostname}</p>` +
         `<p>Make sure your Move is powered on and connected to the same WiFi network, then try again.</p>` +
+        lnpHint +
         `<button id="btn-retry-discovery" style="margin: 0.5rem 0;">Retry</button>` +
         `<p style="margin-top: 0.5rem;">Or enter your Move\'s IP address below:</p>`;
     document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
@@ -166,7 +178,8 @@ async function selectDevice(hostname) {
     try {
         // Validate device is reachable
         const baseUrl = `http://${hostname}`;
-        const isValid = await window.installer.invoke('validate_device_at', { baseUrl });
+        const result = await window.installer.invoke('validate_device_at', { baseUrl });
+        const isValid = result === true || (result && result.valid !== false);
 
         if (isValid) {
             console.log('[DEBUG] Device validated, checking for saved cookie...');
@@ -198,7 +211,14 @@ async function selectDevice(hostname) {
                 setupCodeEntry();
             }
         } else {
-            statusDiv.innerHTML = '<p style="color: red;">Not a valid Move device</p>';
+            const errorDetail = (result && result.error) ? `: ${result.error}` : '';
+            const isMac = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Macintosh');
+            const lnpHint = isMac
+                ? `<p style="font-size: 0.85em; color: #888;">On macOS, check System Settings &gt; Privacy &amp; Security &gt; Local Network and make sure Schwung Installer is allowed.</p>`
+                : '';
+            statusDiv.innerHTML = `<p style="color: red;">Could not reach Move device${errorDetail}</p>` +
+                `<p style="font-size: 0.85em; color: #888;">Check that your Move is on the same network and try again.</p>` +
+                lnpHint;
             document.querySelector('.manual-entry').style.display = 'block';
         }
     } catch (error) {
