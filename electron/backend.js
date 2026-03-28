@@ -33,6 +33,27 @@ function setElectronNet(net) {
     electronNet = net;
 }
 
+function electronNetGet(url, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        const request = electronNet.request({ method: 'GET', url });
+        const timer = setTimeout(() => {
+            request.abort();
+            reject(new Error('Electron net request timeout'));
+        }, timeoutMs);
+        request.on('response', (response) => {
+            console.log(`[DEBUG] HTTP validation successful (status: ${response.statusCode})`);
+            clearTimeout(timer);
+            response.on('data', () => {}); // consume
+            response.on('end', () => resolve(response));
+        });
+        request.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+        request.end();
+    });
+}
+
 // Override console.log to also send to renderer
 const originalLog = console.log;
 console.log = function(...args) {
@@ -82,6 +103,11 @@ async function validateDevice(baseUrl) {
         // Extract hostname from baseUrl
         const url = new URL(baseUrl);
         const hostname = url.hostname;
+
+        // Sanitize hostname to prevent command injection in shell-based resolvers
+        if (!/^[a-zA-Z0-9._-]+$/.test(hostname)) {
+            return { valid: false, error: 'Invalid hostname' };
+        }
 
         // Check if hostname is already an IP address
         const isIpAddress = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
@@ -162,14 +188,16 @@ async function validateDevice(baseUrl) {
                                     return new Promise((resolve, reject) => {
                                         const proc = spawn('dns-sd', ['-G', 'v4', hostname]);
                                         let output = '';
+                                        let settled = false;
                                         const timeout = setTimeout(() => {
                                             proc.kill();
-                                            reject(new Error('dns-sd timed out'));
+                                            if (!settled) { settled = true; reject(new Error('dns-sd timed out')); }
                                         }, 5000);
                                         proc.stdout.on('data', (data) => {
                                             output += data.toString();
                                             const ipMatch = output.match(/\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\s\r\n]/);
-                                            if (ipMatch) {
+                                            if (ipMatch && !settled) {
+                                                settled = true;
                                                 clearTimeout(timeout);
                                                 proc.kill();
                                                 resolve(ipMatch[1]);
@@ -177,7 +205,11 @@ async function validateDevice(baseUrl) {
                                         });
                                         proc.on('error', (err) => {
                                             clearTimeout(timeout);
-                                            reject(err);
+                                            if (!settled) { settled = true; reject(err); }
+                                        });
+                                        proc.on('close', (code) => {
+                                            clearTimeout(timeout);
+                                            if (!settled) { settled = true; reject(new Error(`dns-sd exited (code ${code}) without result`)); }
                                         });
                                     });
                                 }
@@ -244,14 +276,16 @@ async function validateDevice(baseUrl) {
                                             return new Promise((resolve, reject) => {
                                                 const proc = spawn('dns-sd', ['-G', 'v4', hostname]);
                                                 let output = '';
+                                                let settled = false;
                                                 const timeout = setTimeout(() => {
                                                     proc.kill();
-                                                    reject(new Error('dns-sd timed out'));
+                                                    if (!settled) { settled = true; reject(new Error('dns-sd timed out')); }
                                                 }, 5000);
                                                 proc.stdout.on('data', (data) => {
                                                     output += data.toString();
                                                     const ipMatch = output.match(/\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\s\r\n]/);
-                                                    if (ipMatch) {
+                                                    if (ipMatch && !settled) {
+                                                        settled = true;
                                                         clearTimeout(timeout);
                                                         proc.kill();
                                                         resolve(ipMatch[1]);
@@ -259,7 +293,11 @@ async function validateDevice(baseUrl) {
                                                 });
                                                 proc.on('error', (err) => {
                                                     clearTimeout(timeout);
-                                                    reject(err);
+                                                    if (!settled) { settled = true; reject(err); }
+                                                });
+                                                proc.on('close', (code) => {
+                                                    clearTimeout(timeout);
+                                                    if (!settled) { settled = true; reject(new Error(`dns-sd exited (code ${code}) without result`)); }
                                                 });
                                             });
                                         }
@@ -336,27 +374,7 @@ async function validateDevice(baseUrl) {
                 if (electronNet && process.platform === 'darwin') {
                     // Use Electron net on macOS (triggers LNP prompt)
                     console.log(`[DEBUG] Using Electron net for .local resolution (macOS LNP)`);
-                    await new Promise((resolve, reject) => {
-                        const request = electronNet.request({
-                            method: 'GET',
-                            url: validateUrl,
-                        });
-                        const timer = setTimeout(() => {
-                            request.abort();
-                            reject(new Error('Electron net request timeout'));
-                        }, 10000);
-                        request.on('response', (response) => {
-                            console.log(`[DEBUG] HTTP validation successful (status: ${response.statusCode})`);
-                            clearTimeout(timer);
-                            response.on('data', () => {}); // consume
-                            response.on('end', () => resolve());
-                        });
-                        request.on('error', (err) => {
-                            clearTimeout(timer);
-                            reject(err);
-                        });
-                        request.end();
-                    });
+                    await electronNetGet(validateUrl);
                     // We validated but couldn't extract IP from Electron net —
                     // the DNS resolvers above should have cached it already.
                     // If not, subsequent operations will use the hostname directly.
@@ -387,27 +405,7 @@ async function validateDevice(baseUrl) {
                 // Node.js http/axios bypass Apple's Network framework and the prompt
                 // never appears, silently blocking local network connections.
                 console.log(`[DEBUG] Using Electron net module for macOS LNP compatibility`);
-                await new Promise((resolve, reject) => {
-                    const request = electronNet.request({
-                        method: 'GET',
-                        url: validateUrl,
-                    });
-                    const timer = setTimeout(() => {
-                        request.abort();
-                        reject(new Error('Electron net request timeout'));
-                    }, 10000);
-                    request.on('response', (response) => {
-                        console.log(`[DEBUG] HTTP validation successful (status: ${response.statusCode})`);
-                        clearTimeout(timer);
-                        response.on('data', () => {}); // consume
-                        response.on('end', () => resolve());
-                    });
-                    request.on('error', (err) => {
-                        clearTimeout(timer);
-                        reject(err);
-                    });
-                    request.end();
-                });
+                await electronNetGet(validateUrl);
             } else {
                 // Just validate normally (non-macOS or no electron net available)
                 const response = await httpClient.get(validateUrl, { timeout: 10000 });
