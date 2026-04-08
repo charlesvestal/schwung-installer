@@ -462,6 +462,63 @@ async function discoverIpViaSsh(hostname) {
     }
 }
 
+/**
+ * When HTTP validation fails (e.g. broken web server after bad upgrade),
+ * try SSH as a fallback. If SSH works, cache the device IP so install can proceed.
+ * Returns { sshAvailable: true/false, ip: string|null }
+ */
+async function trySshFallback(hostname) {
+    console.log(`[DEBUG] trySshFallback: attempting SSH fallback for ${hostname}`);
+
+    const keyPath = getUsablePrivateKeyPath();
+    if (!keyPath) {
+        console.log('[DEBUG] trySshFallback: no usable SSH key');
+        return { sshAvailable: false, ip: null };
+    }
+
+    // First try to discover the IP via SSH (which also tests connectivity)
+    const discoveredIp = await discoverIpViaSsh(hostname);
+    if (discoveredIp) {
+        cachedDeviceIp = discoveredIp;
+        console.log(`[DEBUG] trySshFallback: discovered IP ${discoveredIp}, cached`);
+        return { sshAvailable: true, ip: discoveredIp };
+    }
+
+    // If discoverIpViaSsh failed, try a simple SSH connection test
+    // (maybe we can connect but couldn't parse the IP)
+    try {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+
+        const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostname} "echo ok"`;
+        const { stdout } = await execAsync(sshCmd, { timeout: 10000 });
+
+        if (stdout.trim() === 'ok') {
+            // SSH works but we couldn't get a numeric IP - use hostname directly
+            // Try DNS resolution as last resort for caching
+            try {
+                const addresses = await dnsResolve4(hostname);
+                if (addresses && addresses.length > 0) {
+                    cachedDeviceIp = addresses[0];
+                    console.log(`[DEBUG] trySshFallback: SSH works, resolved IP ${cachedDeviceIp}`);
+                    return { sshAvailable: true, ip: cachedDeviceIp };
+                }
+            } catch (e) {
+                // DNS failed but SSH works - set hostname as cached IP won't work for install
+                // since installMain requires a numeric IP
+            }
+
+            console.log(`[DEBUG] trySshFallback: SSH works but no numeric IP resolved`);
+            return { sshAvailable: true, ip: null };
+        }
+    } catch (err) {
+        console.log(`[DEBUG] trySshFallback: SSH test failed: ${err.message}`);
+    }
+
+    return { sshAvailable: false, ip: null };
+}
+
 function getSavedCookie() {
     return savedCookie;
 }
@@ -3068,6 +3125,7 @@ module.exports = {
     fixPermissions,
     checkInstallerUpdate,
     clearDnsCache,
+    trySshFallback,
     wifiGetStatus,
     wifiScan,
     wifiListServices,

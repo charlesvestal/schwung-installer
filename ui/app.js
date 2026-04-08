@@ -130,7 +130,32 @@ async function startDeviceDiscovery() {
         console.error('[DEBUG]', state.hostname, 'validation failed:', error);
     }
 
-    // If hostname fails, show retry button and manual entry
+    // HTTP failed — try SSH as fallback (device may have broken web server)
+    console.log('[DEBUG] HTTP failed, trying SSH fallback...');
+    statusDiv.innerHTML = `<div class="spinner"></div><p>Web interface unreachable. Checking SSH connection...</p>`;
+
+    try {
+        const sshResult = await window.installer.invoke('try_ssh_fallback', { hostname: state.hostname });
+        if (sshResult && sshResult.sshAvailable) {
+            console.log('[DEBUG] SSH fallback succeeded, IP:', sshResult.ip);
+            statusDiv.innerHTML =
+                `<p style="color: orange;">&#9888; Web interface on ${state.hostname} is not responding, but SSH is available.</p>` +
+                `<p>This usually means Schwung needs to be repaired. The installer can fix this over SSH.</p>` +
+                `<button id="btn-ssh-repair" style="margin: 0.5rem 0;">Repair via SSH</button>` +
+                `<button id="btn-retry-discovery" style="margin: 0.5rem 0.5rem;">Retry</button>`;
+            document.getElementById('btn-ssh-repair').onclick = () => {
+                state.deviceIp = state.hostname;
+                startSshRepair();
+            };
+            document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
+            document.querySelector('.manual-entry').style.display = 'block';
+            return;
+        }
+    } catch (sshErr) {
+        console.log('[DEBUG] SSH fallback error:', sshErr);
+    }
+
+    // Both HTTP and SSH failed — show standard error
     const isMac = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Macintosh');
     const lnpHint = isMac
         ? `<p style="font-size: 0.85em; color: #888;">On macOS, check System Settings &gt; Privacy &amp; Security &gt; Local Network and make sure Schwung Installer is allowed.</p>`
@@ -211,6 +236,32 @@ async function selectDevice(hostname) {
                 setupCodeEntry();
             }
         } else {
+            // HTTP validation failed — try SSH fallback
+            console.log('[DEBUG] selectDevice: HTTP failed, trying SSH fallback...');
+            statusDiv.innerHTML = '<div class="spinner"></div><p>Web interface unreachable. Checking SSH connection...</p>';
+
+            try {
+                const sshResult = await window.installer.invoke('try_ssh_fallback', { hostname });
+                if (sshResult && sshResult.sshAvailable) {
+                    console.log('[DEBUG] selectDevice: SSH fallback succeeded');
+                    const errorDetail = (result && result.error) ? ` (${result.error})` : '';
+                    statusDiv.innerHTML =
+                        `<p style="color: orange;">&#9888; Web interface not responding${errorDetail}, but SSH is available.</p>` +
+                        `<p>This usually means Schwung needs to be repaired. The installer can fix this over SSH.</p>` +
+                        `<button id="btn-ssh-repair" style="margin: 0.5rem 0;">Repair via SSH</button>` +
+                        `<button id="btn-retry-discovery" style="margin: 0.5rem 0.5rem;">Retry</button>`;
+                    document.getElementById('btn-ssh-repair').onclick = () => {
+                        startSshRepair();
+                    };
+                    document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
+                    document.querySelector('.manual-entry').style.display = 'block';
+                    return;
+                }
+            } catch (sshErr) {
+                console.log('[DEBUG] selectDevice: SSH fallback error:', sshErr);
+            }
+
+            // Both HTTP and SSH failed
             const errorDetail = (result && result.error) ? `: ${result.error}` : '';
             const isMac = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Macintosh');
             const lnpHint = isMac
@@ -1320,6 +1371,50 @@ async function handleUpgradeCore() {
     }
 }
 
+async function startSshRepair() {
+    showScreen('installing');
+    try {
+        initializeChecklist([]);
+        const checklist = document.getElementById('install-checklist');
+        checklist.innerHTML = `
+            <div class="checklist-item" data-item-id="core">
+                <div class="checklist-icon pending">\u25CB</div>
+                <div class="checklist-item-text">Schwung Core (Repair)</div>
+            </div>
+        `;
+
+        updateInstallProgress('Setting up SSH configuration...', 0);
+        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
+
+        updateInstallProgress('Fetching latest release...', 5);
+        const release = await window.installer.invoke('get_latest_release');
+
+        updateChecklistItem('core', 'in-progress');
+        updateInstallProgress(`Downloading ${release.asset_name}...`, 10);
+        const tarballPath = await window.installer.invoke('download_release', {
+            url: release.download_url,
+            destPath: `/tmp/${release.asset_name}`
+        });
+
+        updateInstallProgress('Repairing Schwung core via SSH...', 30);
+        await window.installer.invoke('install_main', {
+            tarballPath,
+            hostname: state.deviceIp,
+            flags: []
+        });
+        updateChecklistItem('core', 'completed');
+
+        updateInstallProgress('Repair complete!', 100);
+        setTimeout(() => {
+            populateSuccessScreen({ isRepair: true });
+            showScreen('success');
+        }, 500);
+    } catch (error) {
+        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
+        showError('Repair failed: ' + error);
+    }
+}
+
 async function handleUpgradeAll() {
     const versionInfo = state.versionInfo;
     const upgradableModules = versionInfo.upgradableModules || [];
@@ -2252,17 +2347,20 @@ async function startInstallation() {
 }
 
 function populateSuccessScreen(options = {}) {
-    const { isUpgrade = false, isUninstall = false, isReenable = false } = options;
+    const { isUpgrade = false, isUninstall = false, isReenable = false, isRepair = false } = options;
     const container = document.getElementById('success-next-steps');
     const backBtn = document.getElementById('btn-back-manage');
     const instructionEl = document.querySelector('#screen-success .instruction');
 
     const startOverBtn = document.getElementById('btn-start-over');
 
+    const restartNotice = '<p style="margin-top: 1rem; color: #b8b8b8;">The web servers are restarting. After 60 seconds, access Schwung Manager at <a href="http://schwung.local" target="_blank" style="color: #0066cc;">http://schwung.local</a></p>';
+
     if (isReenable) {
         document.querySelector('#screen-success h1').textContent = 'Re-enabled!';
         instructionEl.textContent = 'Schwung has been re-enabled. All your modules and settings are intact.';
-        container.style.display = 'none';
+        container.innerHTML = restartNotice;
+        container.style.display = '';
         backBtn.style.display = '';
         startOverBtn.style.display = 'none';
         state.shimDisabled = false;
@@ -2280,10 +2378,21 @@ function populateSuccessScreen(options = {}) {
     }
     startOverBtn.style.display = 'none';
 
+    if (isRepair) {
+        document.querySelector('#screen-success h1').textContent = 'Repair Complete';
+        instructionEl.textContent = 'Schwung core has been reinstalled successfully.';
+        container.innerHTML = restartNotice;
+        container.style.display = '';
+        backBtn.style.display = 'none';
+        startOverBtn.style.display = '';
+        return;
+    }
+
     if (isUpgrade) {
         document.querySelector('#screen-success h1').textContent = 'Upgrade Complete';
         instructionEl.textContent = 'Your modules have been upgraded successfully.';
-        container.style.display = 'none';
+        container.innerHTML = restartNotice;
+        container.style.display = '';
         backBtn.style.display = '';
         return;
     }
@@ -2306,6 +2415,7 @@ function populateSuccessScreen(options = {}) {
 
     html += '</ul>';
     html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/schwung/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
+    html += restartNotice;
     container.innerHTML = html;
     container.style.display = '';
 }
