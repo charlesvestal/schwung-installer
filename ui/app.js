@@ -48,14 +48,11 @@ const state = {
     deviceIp: null,
     authCode: null,
     baseUrl: null,
-    installType: 'complete',
-    selectedModules: [],
     enableScreenReader: false,
     sshPassword: null,
     errors: [],
-    versionInfo: null,
-    installedModules: [],
-    shimDisabled: false
+    shimDisabled: false,
+    managementMode: false
 };
 
 // Screen Management
@@ -216,8 +213,8 @@ async function selectDevice(hostname) {
             const sshWorks = await window.installer.invoke('test_ssh', { hostname: hostname });
 
             if (sshWorks) {
-                console.log('[DEBUG] SSH already works, proceeding to version check');
-                await checkVersions();
+                console.log('[DEBUG] SSH already works, proceeding to install check');
+                await checkIfInstalled();
                 return;
             }
 
@@ -476,8 +473,8 @@ async function startConfirmationPolling() {
             if (connected) {
                 clearInterval(confirmationPollInterval);
                 confirmationPollInterval = null;
-                console.log('[DEBUG] SSH confirmed, checking versions...');
-                await checkVersions();
+                console.log('[DEBUG] SSH confirmed, checking installation...');
+                await checkIfInstalled();
                 return;
             }
 
@@ -559,7 +556,7 @@ function cancelDiscovery() {
     showScreen('warning');
 }
 
-// Module Selection
+// Version / Installation Check
 function updateVersionCheckStatus(message) {
     const statusEl = document.querySelector('#version-check-status .instruction');
     if (statusEl) {
@@ -567,810 +564,88 @@ function updateVersionCheckStatus(message) {
     }
 }
 
-async function checkVersions() {
+async function checkIfInstalled() {
     try {
-        console.log('[DEBUG] Checking if Schwung is installed...');
+        showScreen('version-check');
+        updateVersionCheckStatus('Checking installation...');
 
         const hostname = state.deviceIp;
-
-        // Quick lightweight check: is Schwung installed? (doesn't scan modules)
         const coreCheck = await window.installer.invoke('check_core_installation', { hostname });
 
         if (!coreCheck.installed) {
-            // Not installed - go directly to fresh install flow
-            console.log('[DEBUG] Schwung not installed, showing installation options');
+            // Fresh install mode
             state.managementMode = false;
-            state.installedModules = [];
-            await loadModuleList();
-            document.querySelector('#screen-modules h1').textContent = 'Installation Options';
+            document.querySelector('#screen-modules h1').textContent = 'Install Schwung';
             document.getElementById('btn-install').textContent = 'Install';
-            document.querySelector('.install-options').style.display = 'block';
-            document.getElementById('module-categories').style.display = 'none';
-            document.getElementById('management-top-actions').style.display = 'none';
-            document.getElementById('core-upgrade-row').style.display = 'none';
-            document.getElementById('installed-modules').style.display = 'none';
-            document.getElementById('available-modules').style.display = 'none';
+            const installOptions = document.querySelector('.install-options');
+            if (installOptions) installOptions.style.display = 'block';
             document.getElementById('secondary-actions').style.display = 'none';
             document.getElementById('reenable-banner').style.display = 'none';
-            document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
+            const installedInfo = document.getElementById('installed-info');
+            if (installedInfo) installedInfo.style.display = 'none';
 
             // Show version that will be installed
             const subtitle = document.getElementById('core-version-subtitle');
             try {
-                const latestRelease = await window.installer.invoke('get_latest_release');
-                if (latestRelease && latestRelease.version) {
-                    subtitle.textContent = `Installing version ${latestRelease.version}`;
+                const release = await window.installer.invoke('get_latest_release');
+                if (release && release.version) {
+                    subtitle.textContent = 'Version ' + release.version;
                     subtitle.style.display = '';
                 }
             } catch (e) {
                 subtitle.style.display = 'none';
             }
 
+            document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
             showScreen('modules');
             return;
         }
 
-        // Already installed - go directly to combined upgrade & manage screen
-        console.log('[DEBUG] Schwung installed, loading upgrade & manage screen...');
+        // Already installed
         state.managementMode = true;
-
-        // Set up SSH config once for the session
         await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
 
-        // Check if shim is active (detects firmware update disabling our hooks)
+        // Check shim status
         try {
             const shimStatus = await window.installer.invoke('check_shim_active', { hostname });
             state.shimDisabled = !shimStatus.active;
-            console.log('[DEBUG] Shim active:', shimStatus.active);
         } catch (e) {
-            console.log('[DEBUG] Shim check failed, assuming active:', e.message);
             state.shimDisabled = false;
         }
 
-        // Show loading state
-        showScreen('version-check');
-        updateVersionCheckStatus('Checking installed modules...');
-
-        // Listen for progress updates
-        window.installer.on('version-check-progress', (message) => {
-            updateVersionCheckStatus(message);
-        });
-
-        // Fetch installed modules, latest release, and module catalog in parallel
-        const [installed, latestRelease] = await Promise.all([
-            window.installer.invoke('check_installed_versions', { hostname }),
-            window.installer.invoke('get_latest_release')
-        ]);
-
-        state.installedModules = installed.modules || [];
-
-        const moduleCatalog = await window.installer.invoke('get_module_catalog');
-
-        // Clean up progress listener
-        window.installer.removeAllListeners('version-check-progress');
-
-        // Compare versions
-        const versionInfo = await window.installer.invoke('compare_versions', {
-            installed: { installed: true, core: null, modules: state.installedModules },
-            latestRelease,
-            moduleCatalog
-        });
-
-        // Add core upgrade info
-        const hasUpgrade = coreCheck.core && latestRelease.version && coreCheck.core !== latestRelease.version;
-        versionInfo.coreUpgrade = hasUpgrade ? {
-            current: coreCheck.core,
-            available: latestRelease.version
-        } : null;
-
-        versionInfo.coreVersion = coreCheck.core || null;
-        state.versionInfo = versionInfo;
-        state.allModules = moduleCatalog;
-
-        // Configure modules screen for management mode
-        document.querySelector('#screen-modules h1').textContent = 'Upgrade & Manage';
-        document.querySelector('.install-options').style.display = 'none';
-        document.getElementById('module-categories').style.display = 'none';
+        document.querySelector('#screen-modules h1').textContent = 'Schwung is Installed';
+        const installOptions = document.querySelector('.install-options');
+        if (installOptions) installOptions.style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'flex';
+        document.getElementById('reenable-banner').style.display = state.shimDisabled ? 'flex' : 'none';
+        document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
+        const installedInfo = document.getElementById('installed-info');
+        if (installedInfo) installedInfo.style.display = 'block';
 
-        // Show version subtitle in management mode
+        // Show version
         const subtitle = document.getElementById('core-version-subtitle');
-        if (versionInfo.coreUpgrade) {
-            subtitle.textContent = `Core ${versionInfo.coreUpgrade.current} — upgrade available: ${versionInfo.coreUpgrade.available}`;
-            subtitle.style.display = '';
-        } else if (versionInfo.coreVersion) {
-            subtitle.textContent = `Core version ${versionInfo.coreVersion}`;
+        if (coreCheck.core) {
+            subtitle.textContent = 'Version ' + coreCheck.core;
             subtitle.style.display = '';
         } else {
             subtitle.style.display = 'none';
         }
 
-        // Hide fresh-install action buttons, management mode has its own buttons
-        document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
-
-        // Show or hide re-enable banner based on shim status
-        document.getElementById('reenable-banner').style.display = state.shimDisabled ? 'flex' : 'none';
-
-        // Display management layout
-        displayManagementModules();
-
         showScreen('modules');
-
     } catch (error) {
-        console.error('Version check failed:', error);
-        // If version check fails, assume fresh install
+        console.error('Install check failed:', error);
         state.managementMode = false;
-        state.installedModules = [];
-        await loadModuleList();
-        document.querySelector('#screen-modules h1').textContent = 'Installation Options';
-        document.getElementById('btn-install').textContent = 'Install';
-        document.querySelector('.install-options').style.display = 'block';
-        document.getElementById('management-top-actions').style.display = 'none';
-        document.getElementById('core-upgrade-row').style.display = 'none';
-        document.getElementById('installed-modules').style.display = 'none';
-        document.getElementById('available-modules').style.display = 'none';
+        document.querySelector('#screen-modules h1').textContent = 'Install Schwung';
+        const installOptions = document.querySelector('.install-options');
+        if (installOptions) installOptions.style.display = 'block';
         document.getElementById('secondary-actions').style.display = 'none';
         document.getElementById('reenable-banner').style.display = 'none';
-        document.getElementById('core-version-subtitle').style.display = 'none';
         document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
         showScreen('modules');
     }
 }
 
-
-async function loadModuleList() {
-    try {
-        const modules = await window.installer.invoke('get_module_catalog');
-        state.allModules = modules; // Store for later use
-        displayModules(modules);
-        setupInstallationOptions();
-    } catch (error) {
-        console.error('Failed to load modules:', error);
-        showError('Failed to load module list: ' + error);
-    }
-}
-
-function setupInstallationOptions() {
-    const radioButtons = document.querySelectorAll('input[name="install-type"]');
-    const screenReaderCheckbox = document.getElementById('enable-screenreader');
-    const moduleCategories = document.getElementById('module-categories');
-
-    // Create or find the module summary element (read-only list for Complete mode)
-    let moduleSummary = document.getElementById('module-summary');
-    if (!moduleSummary) {
-        moduleSummary = document.createElement('div');
-        moduleSummary.id = 'module-summary';
-        moduleSummary.className = 'module-summary';
-        moduleCategories.parentNode.insertBefore(moduleSummary, moduleCategories.nextSibling);
-    }
-
-    function updateModuleSummary() {
-        if (state.installType === 'complete' && state.allModules && state.allModules.length > 0) {
-            const categoryNames = {
-                'sound_generator': 'Sound Generators',
-                'audio_fx': 'Audio Effects',
-                'midi_fx': 'MIDI Effects',
-                'utility': 'Utilities',
-                'overtake': 'Overtake',
-                'tool': 'Tools'
-            };
-            const grouped = {};
-            state.allModules.forEach(m => {
-                const cat = m.component_type || 'utility';
-                if (!grouped[cat]) grouped[cat] = [];
-                grouped[cat].push(m);
-            });
-            const lines = Object.entries(categoryNames)
-                .filter(([key]) => grouped[key] && grouped[key].length > 0)
-                .map(([key, title]) => {
-                    const links = grouped[key]
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map(m => `<a href="https://github.com/${m.github_repo}" target="_blank">${m.name}</a>`);
-                    return `<span class="summary-category">${title}:</span> ${links.join(', ')}`;
-                });
-            moduleSummary.innerHTML = lines.map(l => `<p class="summary-line">${l}</p>`).join('');
-            moduleSummary.style.display = '';
-        } else {
-            moduleSummary.style.display = 'none';
-        }
-    }
-
-    // Handle installation type changes
-    radioButtons.forEach(radio => {
-        radio.addEventListener('change', (e) => {
-            state.installType = e.target.value;
-
-            // Show/hide module list based on selection
-            if (e.target.value === 'custom') {
-                moduleCategories.style.display = 'block';
-            } else {
-                moduleCategories.style.display = 'none';
-            }
-
-            updateModuleSummary();
-            updateInstallButtonState();
-        });
-    });
-
-    updateModuleSummary();
-
-    // Handle screen reader checkbox
-    screenReaderCheckbox.addEventListener('change', (e) => {
-        state.enableScreenReader = e.target.checked;
-    });
-
-    // Initialize
-    updateInstallButtonState();
-}
-
-function displayModules(modules) {
-    const categoriesDiv = document.getElementById('module-categories');
-    categoriesDiv.innerHTML = '';
-
-    // Group modules by category
-    const categories = {
-        'sound_generator': { title: 'Sound Generators', modules: [] },
-        'audio_fx': { title: 'Audio Effects', modules: [] },
-        'midi_fx': { title: 'MIDI Effects', modules: [] },
-        'utility': { title: 'Utilities', modules: [] },
-        'overtake': { title: 'Overtake Modules', modules: [] },
-        'tool': { title: 'Tools', modules: [] }
-    };
-
-    modules.forEach(module => {
-        const category = module.component_type || 'utility';
-        if (categories[category]) {
-            categories[category].modules.push(module);
-        }
-    });
-
-    // Select All / Deselect All toggle
-    const toggleDiv = document.createElement('div');
-    toggleDiv.className = 'select-all-toggle';
-    const toggleLink = document.createElement('a');
-    toggleLink.href = '#';
-    toggleLink.id = 'toggle-select-all';
-    toggleLink.textContent = 'Deselect All';
-    toggleLink.onclick = (e) => {
-        e.preventDefault();
-        const checkboxes = categoriesDiv.querySelectorAll('input[type="checkbox"]');
-        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
-        checkboxes.forEach(cb => cb.checked = !allChecked);
-        toggleLink.textContent = allChecked ? 'Select All' : 'Deselect All';
-        updateSelectedModules();
-    };
-    toggleDiv.appendChild(toggleLink);
-    categoriesDiv.appendChild(toggleDiv);
-
-    // Display categories with checkboxes (fresh install mode only)
-    Object.entries(categories).forEach(([key, category]) => {
-        if (category.modules.length === 0) return;
-
-        category.modules.sort((a, b) => a.name.localeCompare(b.name));
-
-        const categoryDiv = document.createElement('div');
-        categoryDiv.className = 'module-category';
-
-        const title = document.createElement('h3');
-        title.textContent = category.title;
-        categoryDiv.appendChild(title);
-
-        category.modules.forEach(module => {
-            const moduleItem = document.createElement('div');
-            moduleItem.className = 'module-item';
-
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.id = `module-${module.id}`;
-            checkbox.checked = true;
-            checkbox.setAttribute('data-module-id', module.id);
-            checkbox.onchange = () => updateSelectedModules();
-
-            const moduleInfo = document.createElement('div');
-            moduleInfo.className = 'module-info';
-
-            const moduleName = document.createElement('h4');
-            const nameLink = document.createElement('a');
-            nameLink.href = `https://github.com/${module.github_repo}`;
-            nameLink.target = '_blank';
-            nameLink.textContent = module.name;
-            nameLink.onclick = (e) => e.stopPropagation();
-            moduleName.appendChild(nameLink);
-
-            const moduleDesc = document.createElement('p');
-            moduleDesc.textContent = module.description || 'No description available';
-
-            moduleInfo.appendChild(moduleName);
-            moduleInfo.appendChild(moduleDesc);
-
-            if (module.assets) {
-                const requiresEl = document.createElement('p');
-                requiresEl.className = 'module-requires';
-                if (module.assets.description) {
-                    requiresEl.textContent = module.assets.description;
-                } else if (module.assets.optional) {
-                    requiresEl.textContent = `Supports additional uploaded ${module.assets.extensions.join(', ')} ${module.assets.label.toLowerCase()}`;
-                } else {
-                    requiresEl.textContent = `Requires ${module.assets.label.toLowerCase()} (${module.assets.extensions.join(', ')} files)`;
-                }
-                moduleInfo.appendChild(requiresEl);
-            }
-
-            moduleItem.appendChild(checkbox);
-            moduleItem.appendChild(moduleInfo);
-            moduleItem.onclick = (e) => {
-                if (e.target !== checkbox) {
-                    checkbox.checked = !checkbox.checked;
-                    updateSelectedModules();
-                }
-            };
-
-            categoryDiv.appendChild(moduleItem);
-        });
-
-        categoriesDiv.appendChild(categoryDiv);
-    });
-
-    updateSelectedModules();
-}
-
-function updateSelectedModules() {
-    const checkboxes = document.querySelectorAll('#module-categories input[type="checkbox"]');
-    state.selectedModules = Array.from(checkboxes)
-        .filter(cb => cb.checked)
-        .map(cb => cb.id.replace('module-', ''));
-
-    // Sync toggle label
-    const toggleLink = document.getElementById('toggle-select-all');
-    if (toggleLink) {
-        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
-        toggleLink.textContent = allChecked ? 'Deselect All' : 'Select All';
-    }
-
-    updateInstallButtonState();
-}
-
-// Map component_type to on-device install subdirectory
-function getInstallSubdir(componentType) {
-    switch (componentType) {
-        case 'sound_generator': return 'sound_generators';
-        case 'audio_fx': return 'audio_fx';
-        case 'midi_fx': return 'midi_fx';
-        case 'utility': return 'utilities';
-        case 'overtake': return 'overtake';
-        case 'tool': return 'tools';
-        default: return 'other';
-    }
-}
-
-// --- Module operation queue ---
-// Ensures Install/Upgrade/Remove operations don't collide on the SSH connection
-const moduleOpQueue = [];
-let moduleOpRunning = false;
-
-async function enqueueModuleOp(op) {
-    return new Promise((resolve, reject) => {
-        moduleOpQueue.push({ op, resolve, reject });
-        processModuleOpQueue();
-    });
-}
-
-// --- Asset Browser State ---
-const assetBrowser = {
-    open: false,
-    moduleId: null,
-    componentType: null,
-    assets: null,
-    basePath: null,
-    currentPath: null,
-    loading: false
-};
-
-// --- WiFi Manager State ---
-const wifiManager = {
-    open: false,
-    loading: false,
-    networks: [],
-    isUsbConnection: false,
-    passwordTarget: null
-};
-
-async function processModuleOpQueue() {
-    if (moduleOpRunning || moduleOpQueue.length === 0) return;
-    moduleOpRunning = true;
-    const { op, resolve, reject } = moduleOpQueue.shift();
-    try {
-        const result = await op();
-        resolve(result);
-    } catch (err) {
-        reject(err);
-    } finally {
-        moduleOpRunning = false;
-        processModuleOpQueue();
-    }
-}
-
-function displayManagementModules() {
-    const versionInfo = state.versionInfo;
-    if (!versionInfo) return;
-
-    // --- Core row (always shown) ---
-    const coreRow = document.getElementById('core-upgrade-row');
-    coreRow.style.display = 'block';
-    coreRow.innerHTML = '';
-
-    const coreRowDiv = document.createElement('div');
-    coreRowDiv.className = versionInfo.coreUpgrade ? 'module-row module-row-upgrade' : 'module-row';
-
-    const coreInfo = document.createElement('div');
-    coreInfo.className = 'module-row-info';
-
-    const coreTitle = document.createElement('h4');
-    coreTitle.textContent = 'Schwung Core';
-    coreInfo.appendChild(coreTitle);
-
-    const coreVersion = document.createElement('span');
-    if (versionInfo.coreUpgrade) {
-        coreVersion.className = 'version-status upgrade';
-        coreVersion.textContent = `${versionInfo.coreUpgrade.current} \u2192 ${versionInfo.coreUpgrade.available}`;
-    } else {
-        coreVersion.className = 'version-status current';
-        coreVersion.textContent = `${versionInfo.coreVersion || 'installed'} (latest)`;
-    }
-    coreInfo.appendChild(coreVersion);
-    coreRowDiv.appendChild(coreInfo);
-
-    if (versionInfo.coreUpgrade) {
-        const coreActions = document.createElement('div');
-        coreActions.className = 'module-actions';
-        const upgradeBtn = document.createElement('button');
-        upgradeBtn.className = 'btn-action btn-upgrade';
-        upgradeBtn.textContent = 'Upgrade';
-        upgradeBtn.onclick = () => handleUpgradeCore();
-        coreActions.appendChild(upgradeBtn);
-        coreRowDiv.appendChild(coreActions);
-    }
-
-    coreRow.appendChild(coreRowDiv);
-
-    // --- Installed modules by category ---
-    const installedDiv = document.getElementById('installed-modules');
-    installedDiv.style.display = 'block';
-    installedDiv.innerHTML = '';
-
-    const allInstalled = [...versionInfo.upgradableModules, ...versionInfo.upToDateModules];
-
-    // Group by component_type
-    const categories = {
-        'sound_generator': { title: 'Sound Generators', modules: [] },
-        'audio_fx': { title: 'Audio Effects', modules: [] },
-        'midi_fx': { title: 'MIDI Effects', modules: [] },
-        'utility': { title: 'Utilities', modules: [] },
-        'overtake': { title: 'Overtake Modules', modules: [] },
-        'tool': { title: 'Tools', modules: [] }
-    };
-
-    const upgradableIds = new Set(versionInfo.upgradableModules.map(m => m.id));
-
-    allInstalled.forEach(module => {
-        const cat = module.component_type || 'utility';
-        if (categories[cat]) {
-            categories[cat].modules.push(module);
-        }
-    });
-
-    Object.entries(categories).forEach(([key, category]) => {
-        if (category.modules.length === 0) return;
-
-        category.modules.sort((a, b) => a.name.localeCompare(b.name));
-
-        const categoryDiv = document.createElement('div');
-        categoryDiv.className = 'module-category';
-
-        const title = document.createElement('h3');
-        title.textContent = category.title;
-        categoryDiv.appendChild(title);
-
-        category.modules.forEach(module => {
-            const row = document.createElement('div');
-            row.className = 'module-row';
-            row.setAttribute('data-module-id', module.id);
-
-            const info = document.createElement('div');
-            info.className = 'module-row-info';
-
-            const nameEl = document.createElement('h4');
-            const nameLink = document.createElement('a');
-            nameLink.href = `https://github.com/${module.github_repo}`;
-            nameLink.target = '_blank';
-            nameLink.textContent = module.name;
-            nameEl.appendChild(nameLink);
-
-            const versionEl = document.createElement('span');
-            if (upgradableIds.has(module.id)) {
-                versionEl.className = 'version-status upgrade';
-                versionEl.textContent = `${module.currentVersion} \u2192 `;
-                const newVerLink = document.createElement('a');
-                newVerLink.href = `https://github.com/${module.github_repo}/releases/tag/v${module.version}`;
-                newVerLink.target = '_blank';
-                newVerLink.textContent = module.version;
-                versionEl.appendChild(newVerLink);
-            } else {
-                versionEl.className = 'version-status current';
-                const verLink = document.createElement('a');
-                const displayVer = module.currentVersion || module.version;
-                verLink.href = `https://github.com/${module.github_repo}/releases/tag/v${displayVer}`;
-                verLink.target = '_blank';
-                verLink.textContent = `${displayVer} (latest)`;
-                versionEl.appendChild(verLink);
-            }
-
-            info.appendChild(nameEl);
-            info.appendChild(versionEl);
-
-            const actions = document.createElement('div');
-            actions.className = 'module-actions';
-
-            if (upgradableIds.has(module.id)) {
-                const upgradeBtn = document.createElement('button');
-                upgradeBtn.className = 'btn-action btn-upgrade';
-                upgradeBtn.textContent = 'Upgrade';
-                upgradeBtn.onclick = () => handleUpgradeModule(module.id);
-                actions.appendChild(upgradeBtn);
-            }
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'btn-action btn-remove';
-            removeBtn.textContent = 'Remove';
-            removeBtn.onclick = () => handleRemoveModule(module.id, module.component_type);
-            actions.appendChild(removeBtn);
-
-            if (module.assets) {
-                const assetBtn = document.createElement('button');
-                assetBtn.className = 'btn-action btn-add-assets';
-                assetBtn.textContent = `Manage ${module.assets.label}`;
-                assetBtn.onclick = () => openAssetBrowser(module.id, module.name, module.component_type, module.assets);
-                actions.appendChild(assetBtn);
-            }
-
-            row.appendChild(info);
-            row.appendChild(actions);
-            categoryDiv.appendChild(row);
-        });
-
-        installedDiv.appendChild(categoryDiv);
-    });
-
-    // --- Available (not installed) modules with individual Install buttons ---
-    const availableDiv = document.getElementById('available-modules');
-    const availableList = document.getElementById('available-module-list');
-
-    if (versionInfo.newModules.length > 0) {
-        availableDiv.style.display = 'block';
-        availableList.innerHTML = '';
-
-        // Show "Install All" button when there are multiple available modules
-        const installAllBtn = document.getElementById('btn-install-all');
-        if (installAllBtn && versionInfo.newModules.length > 1) {
-            installAllBtn.style.display = '';
-            installAllBtn.textContent = `Install All (${versionInfo.newModules.length})`;
-            installAllBtn.onclick = () => handleInstallAll();
-        }
-
-        versionInfo.newModules.sort((a, b) => a.name.localeCompare(b.name));
-
-        versionInfo.newModules.forEach(module => {
-            const row = document.createElement('div');
-            row.className = 'module-row';
-            row.setAttribute('data-module-id', module.id);
-
-            const info = document.createElement('div');
-            info.className = 'module-row-info';
-
-            const nameEl = document.createElement('h4');
-            const nameLink = document.createElement('a');
-            nameLink.href = `https://github.com/${module.github_repo}`;
-            nameLink.target = '_blank';
-            nameLink.textContent = module.name;
-            nameEl.appendChild(nameLink);
-
-            if (module.version) {
-                const versionLink = document.createElement('a');
-                versionLink.href = `https://github.com/${module.github_repo}/releases/tag/v${module.version}`;
-                versionLink.target = '_blank';
-                versionLink.className = 'version-status current';
-                versionLink.textContent = `v${module.version}`;
-                nameEl.appendChild(document.createTextNode(' '));
-                nameEl.appendChild(versionLink);
-            }
-
-            const descEl = document.createElement('p');
-            descEl.textContent = module.description || 'No description available';
-
-            info.appendChild(nameEl);
-            info.appendChild(descEl);
-
-            if (module.assets) {
-                const requiresEl = document.createElement('p');
-                requiresEl.className = 'module-requires';
-                if (module.assets.description) {
-                    requiresEl.textContent = module.assets.description;
-                } else if (module.assets.optional) {
-                    requiresEl.textContent = `Supports additional uploaded ${module.assets.extensions.join(', ')} ${module.assets.label.toLowerCase()}`;
-                } else {
-                    requiresEl.textContent = `Requires ${module.assets.label.toLowerCase()} (${module.assets.extensions.join(', ')} files)`;
-                }
-                info.appendChild(requiresEl);
-            }
-
-            const actions = document.createElement('div');
-            actions.className = 'module-actions';
-
-            const installBtn = document.createElement('button');
-            installBtn.className = 'btn-action btn-install-module';
-            installBtn.textContent = 'Install';
-            installBtn.onclick = () => handleInstallModule(module.id);
-            actions.appendChild(installBtn);
-
-            row.appendChild(info);
-            row.appendChild(actions);
-            availableList.appendChild(row);
-        });
-    } else {
-        availableDiv.style.display = 'none';
-    }
-
-    // --- Upgrade All button visibility ---
-    const hasAnyUpgrade = versionInfo.coreUpgrade || versionInfo.upgradableModules.length > 0;
-    document.getElementById('management-top-actions').style.display = hasAnyUpgrade ? 'block' : 'none';
-
-    // --- "All up to date" status message ---
-    let statusEl = document.getElementById('management-status');
-    if (!statusEl) {
-        statusEl = document.createElement('p');
-        statusEl.id = 'management-status';
-        statusEl.className = 'management-status';
-        // Insert after the core upgrade row
-        coreRow.parentNode.insertBefore(statusEl, coreRow.nextSibling);
-    }
-    if (!hasAnyUpgrade && versionInfo.newModules.length === 0) {
-        statusEl.textContent = 'All modules installed and up to date.';
-        statusEl.style.display = '';
-    } else if (!hasAnyUpgrade && versionInfo.newModules.length > 0) {
-        statusEl.textContent = 'All installed modules are up to date.';
-        statusEl.style.display = '';
-    } else {
-        statusEl.style.display = 'none';
-    }
-
-    // --- "Add Custom Module" button ---
-    let customBtnContainer = document.getElementById('custom-module-btn-container');
-    if (!customBtnContainer) {
-        customBtnContainer = document.createElement('div');
-        customBtnContainer.id = 'custom-module-btn-container';
-        customBtnContainer.style.cssText = 'margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;';
-        const customBtn = document.createElement('button');
-        customBtn.className = 'btn-action';
-        customBtn.textContent = 'Add Custom Module...';
-        customBtn.onclick = openCustomModuleModal;
-        customBtnContainer.appendChild(customBtn);
-    }
-    // Place after available-modules or installed-modules
-    const anchor = document.getElementById('available-modules');
-    anchor.parentNode.insertBefore(customBtnContainer, anchor.nextSibling);
-}
-
-// --- Custom Module Modal ---
-
-function openCustomModuleModal() {
-    const modal = document.getElementById('custom-module-modal');
-    const input = document.getElementById('custom-module-source');
-    const status = document.getElementById('custom-module-status');
-    input.value = '';
-    status.style.display = 'none';
-    status.textContent = '';
-    status.className = 'custom-module-status';
-    document.getElementById('custom-module-install').disabled = false;
-    modal.style.display = 'flex';
-    input.focus();
-}
-
-function closeCustomModuleModal() {
-    document.getElementById('custom-module-modal').style.display = 'none';
-}
-
-async function handleCustomModuleBrowse() {
-    const result = await window.installer.invoke('pick_tarball');
-    if (!result.canceled) {
-        document.getElementById('custom-module-source').value = result.filePath;
-    }
-}
-
-async function handleCustomModuleInstall() {
-    const input = document.getElementById('custom-module-source');
-    const status = document.getElementById('custom-module-status');
-    const installBtn = document.getElementById('custom-module-install');
-    const source = input.value.trim();
-
-    if (!source) return;
-
-    status.style.display = 'block';
-    status.className = 'custom-module-status installing';
-    status.textContent = 'Installing...';
-    installBtn.disabled = true;
-
-    try {
-        const result = await window.installer.invoke('install_custom_module', {
-            source,
-            hostname: state.deviceIp
-        });
-
-        status.className = 'custom-module-status success';
-        status.textContent = `Installed ${result.moduleName || result.moduleId} successfully.`;
-
-        // Refresh version info to show the newly installed module
-        setTimeout(async () => {
-            closeCustomModuleModal();
-            try {
-                const versionInfo = await window.installer.invoke('check_installed_versions', { hostname: state.deviceIp });
-                state.versionInfo = versionInfo;
-                displayManagementModules();
-            } catch {}
-        }, 1500);
-    } catch (error) {
-        status.className = 'custom-module-status error';
-        status.textContent = `Failed: ${error.message}`;
-        installBtn.disabled = false;
-    }
-}
-
-async function handleUpgradeCore() {
-    if (!confirm('Upgrade Schwung Core?')) return;
-
-    showScreen('installing');
-    try {
-        initializeChecklist([]);
-        // Manually add core item
-        const checklist = document.getElementById('install-checklist');
-        checklist.innerHTML = `
-            <div class="checklist-item" data-item-id="core">
-                <div class="checklist-icon pending">\u25CB</div>
-                <div class="checklist-item-text">Schwung Core</div>
-            </div>
-        `;
-
-        updateInstallProgress('Setting up SSH configuration...', 0);
-        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
-
-        updateInstallProgress('Fetching latest release...', 5);
-        const release = await window.installer.invoke('get_latest_release');
-
-        updateChecklistItem('core', 'in-progress');
-        updateInstallProgress(`Downloading ${release.asset_name}...`, 10);
-        const tarballPath = await window.installer.invoke('download_release', {
-            url: release.download_url,
-            destPath: `/tmp/${release.asset_name}`
-        });
-
-        updateInstallProgress('Upgrading Schwung core...', 30);
-        await window.installer.invoke('install_main', {
-            tarballPath,
-            hostname: state.deviceIp,
-            flags: []
-        });
-        updateChecklistItem('core', 'completed');
-
-        updateInstallProgress('Upgrade complete!', 100);
-        setTimeout(() => {
-            populateSuccessScreen({ isUpgrade: true });
-            showScreen('success');
-        }, 500);
-    } catch (error) {
-        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
-        showError('Upgrade failed: ' + error);
-    }
-}
-
+// SSH Repair
 async function startSshRepair() {
     showScreen('installing');
     try {
@@ -1415,768 +690,6 @@ async function startSshRepair() {
     }
 }
 
-async function handleUpgradeAll() {
-    const versionInfo = state.versionInfo;
-    const upgradableModules = versionInfo.upgradableModules || [];
-    const hasCore = !!versionInfo.coreUpgrade;
-
-    if (!hasCore && upgradableModules.length === 0) return;
-
-    const items = [];
-    if (hasCore) items.push('Core');
-    items.push(...upgradableModules.map(m => m.name));
-
-    if (!confirm(`Upgrade the following?\n\n${items.join('\n')}`)) return;
-
-    showScreen('installing');
-    try {
-        const moduleObjects = upgradableModules;
-        // Build checklist manually
-        const checklist = document.getElementById('install-checklist');
-        const allItems = [];
-        if (hasCore) allItems.push({ id: 'core', name: 'Schwung Core' });
-        moduleObjects.forEach(m => allItems.push({ id: m.id, name: m.name }));
-
-        checklist.innerHTML = allItems.map(item => `
-            <div class="checklist-item" data-item-id="${item.id}">
-                <div class="checklist-icon pending">\u25CB</div>
-                <div class="checklist-item-text">${item.name}</div>
-            </div>
-        `).join('');
-
-        updateInstallProgress('Setting up SSH configuration...', 0);
-        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
-
-        let progress = 5;
-
-        // Upgrade core if available
-        if (hasCore) {
-            updateInstallProgress('Fetching latest release...', progress);
-            const release = await window.installer.invoke('get_latest_release');
-
-            updateChecklistItem('core', 'in-progress');
-            updateInstallProgress(`Downloading ${release.asset_name}...`, 10);
-            const tarballPath = await window.installer.invoke('download_release', {
-                url: release.download_url,
-                destPath: `/tmp/${release.asset_name}`
-            });
-
-            updateInstallProgress('Upgrading Schwung core...', 20);
-            await window.installer.invoke('install_main', {
-                tarballPath,
-                hostname: state.deviceIp,
-                flags: []
-            });
-            updateChecklistItem('core', 'completed');
-            progress = 40;
-        }
-
-        // Fix permissions before module installs (root-owned dirs from older installs)
-        if (moduleObjects.length > 0) {
-            updateInstallProgress('Fixing file permissions...', progress);
-            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
-        }
-
-        // Upgrade modules
-        if (moduleObjects.length > 0) {
-            const remainingProgress = 100 - progress;
-            const progressPerModule = remainingProgress / moduleObjects.length;
-
-            for (let i = 0; i < moduleObjects.length; i++) {
-                const module = moduleObjects[i];
-                const baseProgress = progress + (i * progressPerModule);
-
-                updateChecklistItem(module.id, 'in-progress');
-                updateInstallProgress(`Downloading ${module.name} (${i + 1}/${moduleObjects.length})...`, baseProgress);
-                const tarballPath = await window.installer.invoke('download_release', {
-                    url: module.download_url,
-                    destPath: `/tmp/${module.asset_name}`
-                });
-
-                updateInstallProgress(`Upgrading ${module.name} (${i + 1}/${moduleObjects.length})...`, baseProgress + progressPerModule * 0.5);
-                await window.installer.invoke('install_module_package', {
-                    moduleId: module.id,
-                    tarballPath,
-                    componentType: module.component_type,
-                    hostname: state.deviceIp
-                });
-                updateChecklistItem(module.id, 'completed');
-            }
-        }
-
-        updateInstallProgress('All upgrades complete!', 100);
-        setTimeout(() => {
-            populateSuccessScreen({ isUpgrade: true });
-            showScreen('success');
-        }, 500);
-    } catch (error) {
-        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
-        showError('Upgrade failed: ' + error);
-    }
-}
-
-async function handleInstallAll() {
-    const versionInfo = state.versionInfo;
-    const newModules = versionInfo.newModules || [];
-
-    if (newModules.length === 0) return;
-
-    if (!confirm(`Install all ${newModules.length} available modules?`)) return;
-
-    showScreen('installing');
-    try {
-        // Build checklist
-        const checklist = document.getElementById('install-checklist');
-        checklist.innerHTML = newModules.map(module => `
-            <div class="checklist-item" data-item-id="${module.id}">
-                <div class="checklist-icon pending">\u25CB</div>
-                <div class="checklist-item-text">${module.name}</div>
-            </div>
-        `).join('');
-
-        updateInstallProgress('Setting up SSH configuration...', 0);
-        await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
-
-        // Fix permissions before batch install
-        updateInstallProgress('Fixing file permissions...', 2);
-        await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
-
-        // Listen for batch progress events
-        const progressHandler = (progress) => {
-            const { phase, current, total, message } = progress;
-            let pct = 5;
-            if (phase === 'download') {
-                pct = 5 + (current / total) * 30; // 5-35%
-            } else if (phase === 'upload') {
-                pct = 35 + (current / total) * 45; // 35-80%
-                // Mark downloaded modules as in-progress during upload
-                if (current > 0) {
-                    const mod = newModules[current - 1];
-                    if (mod) updateChecklistItem(mod.id, 'in-progress');
-                }
-            } else if (phase === 'install') {
-                pct = 80 + (current / total) * 20; // 80-100%
-                // Mark all as completed when install finishes
-                if (current === total) {
-                    newModules.forEach(m => updateChecklistItem(m.id, 'completed'));
-                }
-            }
-            updateInstallProgress(message, pct);
-        };
-
-        window.installer.on('batch-install-progress', progressHandler);
-
-        // Prepare module data for batch install
-        const modulesForBatch = newModules.map(m => ({
-            id: m.id,
-            name: m.name,
-            download_url: m.download_url,
-            asset_name: m.asset_name,
-            component_type: m.component_type
-        }));
-
-        // Mark all as in-progress during download phase
-        newModules.forEach(m => updateChecklistItem(m.id, 'in-progress'));
-
-        const results = await window.installer.invoke('install_module_batch', {
-            modules: modulesForBatch,
-            hostname: state.deviceIp
-        });
-
-        window.installer.removeAllListeners('batch-install-progress');
-
-        // Update state with results
-        for (const installed of results.installed) {
-            const module = newModules.find(m => m.id === installed.id);
-            if (module) {
-                updateChecklistItem(installed.id, 'completed');
-                versionInfo.newModules = versionInfo.newModules.filter(m => m.id !== installed.id);
-                module.currentVersion = module.version || 'installed';
-                versionInfo.upToDateModules.push(module);
-                state.installedModules.push({
-                    id: module.id,
-                    name: module.name,
-                    version: module.version,
-                    component_type: module.component_type
-                });
-            }
-        }
-
-        for (const failed of results.failed) {
-            updateChecklistItem(failed.id, 'failed');
-        }
-
-        const msg = results.failed.length > 0
-            ? `Installed ${results.installed.length} modules (${results.failed.length} failed)`
-            : `All ${results.installed.length} modules installed!`;
-        updateInstallProgress(msg, 100);
-
-        setTimeout(() => {
-            populateSuccessScreen({ isUpgrade: false, installAllResults: results });
-            showScreen('success');
-        }, 1000);
-    } catch (error) {
-        window.installer.removeAllListeners('batch-install-progress');
-        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
-        showError('Install All failed: ' + error);
-    }
-}
-
-async function handleUpgradeModule(moduleId) {
-    const module = state.allModules.find(m => m.id === moduleId);
-    if (!module) return;
-
-    if (!confirm(`Upgrade ${module.name}?`)) return;
-
-    // Update button to show queued/in-progress state
-    const row = document.querySelector(`.module-row[data-module-id="${moduleId}"]`);
-    if (row) {
-        const actions = row.querySelector('.module-actions');
-        actions.innerHTML = '<span class="action-status installing">Queued...</span>';
-    }
-
-    try {
-        await enqueueModuleOp(async () => {
-            // Update to in-progress
-            if (row) {
-                const actions = row.querySelector('.module-actions');
-                actions.innerHTML = '<span class="action-status installing">Upgrading...</span>';
-            }
-
-            const tarballPath = await window.installer.invoke('download_release', {
-                url: module.download_url,
-                destPath: `/tmp/${module.asset_name}`
-            });
-
-            await window.installer.invoke('install_module_package', {
-                moduleId: module.id,
-                tarballPath,
-                componentType: module.component_type,
-                hostname: state.deviceIp
-            });
-        });
-
-        // Move from upgradable to up-to-date in state
-        const vi = state.versionInfo;
-        const upgraded = vi.upgradableModules.find(m => m.id === moduleId);
-        if (upgraded) {
-            vi.upgradableModules = vi.upgradableModules.filter(m => m.id !== moduleId);
-            upgraded.currentVersion = upgraded.version;
-            vi.upToDateModules.push(upgraded);
-        }
-
-        // Re-render to reflect new state
-        displayManagementModules();
-    } catch (error) {
-        console.error('Upgrade failed:', error);
-        if (row) {
-            const actions = row.querySelector('.module-actions');
-            actions.innerHTML = `<span class="action-status error">Failed</span>`;
-        }
-        // Re-render after a delay so user sees the error
-        setTimeout(() => displayManagementModules(), 2000);
-    }
-}
-
-async function handleRemoveModule(moduleId, componentType) {
-    const module = state.allModules.find(m => m.id === moduleId);
-    const displayName = module ? module.name : moduleId;
-
-    if (!confirm(`Remove ${displayName}? This will delete the module from your device.`)) return;
-
-    const row = document.querySelector(`.module-row[data-module-id="${moduleId}"]`);
-    if (row) {
-        const actions = row.querySelector('.module-actions');
-        actions.innerHTML = '<span class="action-status installing">Queued...</span>';
-    }
-
-    try {
-        await enqueueModuleOp(async () => {
-            if (row) {
-                const actions = row.querySelector('.module-actions');
-                actions.innerHTML = '<span class="action-status installing">Removing...</span>';
-            }
-            await window.installer.invoke('remove_module', {
-                moduleId,
-                componentType,
-                hostname: state.deviceIp
-            });
-        });
-
-        // Remove from installed modules state
-        state.installedModules = state.installedModules.filter(m => m.id !== moduleId);
-
-        // Move module from installed to available in versionInfo
-        const vi = state.versionInfo;
-        const removedFromUpgradable = vi.upgradableModules.find(m => m.id === moduleId);
-        const removedFromUpToDate = vi.upToDateModules.find(m => m.id === moduleId);
-        const removedModule = removedFromUpgradable || removedFromUpToDate;
-
-        vi.upgradableModules = vi.upgradableModules.filter(m => m.id !== moduleId);
-        vi.upToDateModules = vi.upToDateModules.filter(m => m.id !== moduleId);
-
-        if (removedModule) {
-            vi.newModules.push(removedModule);
-        }
-
-        // Re-render management view
-        displayManagementModules();
-    } catch (error) {
-        console.error('Remove failed:', error);
-        if (row) {
-            const actions = row.querySelector('.module-actions');
-            actions.innerHTML = `<span class="action-status error">Failed</span>`;
-        }
-        setTimeout(() => displayManagementModules(), 2000);
-    }
-}
-
-async function handleInstallModule(moduleId) {
-    const module = state.allModules.find(m => m.id === moduleId);
-    if (!module) return;
-
-    // Update button to show queued state
-    const row = document.querySelector(`#available-module-list .module-row[data-module-id="${moduleId}"]`);
-    if (row) {
-        const actions = row.querySelector('.module-actions');
-        actions.innerHTML = '<span class="action-status installing">Queued...</span>';
-    }
-
-    try {
-        await enqueueModuleOp(async () => {
-            // Update to in-progress
-            if (row) {
-                const actions = row.querySelector('.module-actions');
-                actions.innerHTML = '<span class="action-status installing">Installing...</span>';
-            }
-
-            const tarballPath = await window.installer.invoke('download_release', {
-                url: module.download_url,
-                destPath: `/tmp/${module.asset_name}`
-            });
-
-            await window.installer.invoke('install_module_package', {
-                moduleId: module.id,
-                tarballPath,
-                componentType: module.component_type,
-                hostname: state.deviceIp
-            });
-        });
-
-        // Move from new to up-to-date in state
-        const vi = state.versionInfo;
-        vi.newModules = vi.newModules.filter(m => m.id !== moduleId);
-        const installedVersion = module.version || 'installed';
-        module.currentVersion = installedVersion;
-        vi.upToDateModules.push(module);
-
-        // Add to installed modules
-        state.installedModules.push({
-            id: module.id,
-            name: module.name,
-            version: installedVersion,
-            component_type: module.component_type
-        });
-
-        // Re-render to move module to installed section
-        displayManagementModules();
-    } catch (error) {
-        console.error('Install failed:', error);
-        if (row) {
-            const actions = row.querySelector('.module-actions');
-            actions.innerHTML = `<span class="action-status error">Failed</span>`;
-        }
-        setTimeout(() => displayManagementModules(), 2000);
-    }
-}
-
-// --- Asset Browser Functions ---
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-}
-
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    const val = bytes / Math.pow(1024, i);
-    return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function showAssetSpinner(show) {
-    const list = document.getElementById('asset-browser-list');
-    const existing = list.querySelector('.asset-spinner');
-    if (show && !existing) {
-        list.innerHTML = '<div class="asset-spinner"><div class="spinner"></div></div>';
-    } else if (!show && existing) {
-        existing.remove();
-    }
-}
-
-function setAssetStatus(msg, type) {
-    const el = document.getElementById('asset-browser-status');
-    el.textContent = msg;
-    el.className = 'asset-status';
-    if (type === 'error') el.classList.add('error');
-    else if (type === 'uploading') el.classList.add('uploading');
-}
-
-function isAssetBrowserAtRoot() {
-    return assetBrowser.assets?.path === '.' &&
-           assetBrowser.currentPath === assetBrowser.basePath;
-}
-
-function openAssetBrowser(moduleId, moduleName, componentType, assets) {
-    const categoryPath = getInstallSubdir(componentType);
-    const basePath = assets.path === '.'
-        ? `/data/UserData/schwung/modules/${categoryPath}/${moduleId}`
-        : `/data/UserData/schwung/modules/${categoryPath}/${moduleId}/${assets.path}`;
-
-    assetBrowser.open = true;
-    assetBrowser.moduleId = moduleId;
-    assetBrowser.componentType = componentType;
-    assetBrowser.assets = assets;
-    assetBrowser.basePath = basePath;
-    assetBrowser.currentPath = basePath;
-
-    document.getElementById('asset-browser-title').textContent = `${moduleName} - Manage ${assets.label}`;
-    document.getElementById('asset-browser-list').innerHTML = '';
-    document.getElementById('asset-browser-breadcrumb').innerHTML = '';
-
-    const hintEl = document.getElementById('asset-browser-hint');
-    if (assets.hint) {
-        let hintHTML = assets.hint;
-        if (assets.hint_url) {
-            const label = assets.hint_url_label || assets.hint_url;
-            hintHTML += ` <a href="${assets.hint_url}" target="_blank">${label}</a>`;
-        }
-        hintEl.innerHTML = hintHTML;
-        hintEl.style.display = 'block';
-    } else {
-        hintEl.style.display = 'none';
-    }
-    setAssetStatus('', null);
-    showAssetSpinner(true);
-    document.getElementById('asset-browser-modal').style.display = 'flex';
-
-    refreshAssetListing();
-}
-
-function closeAssetBrowser() {
-    assetBrowser.open = false;
-    document.getElementById('asset-browser-modal').style.display = 'none';
-}
-
-function openGlobalFileBrowser() {
-    const basePath = '/data/UserData/schwung';
-
-    assetBrowser.open = true;
-    assetBrowser.moduleId = null;
-    assetBrowser.componentType = null;
-    assetBrowser.assets = { path: '.', extensions: [], label: 'Files', allowFolders: true };
-    assetBrowser.basePath = basePath;
-    assetBrowser.currentPath = basePath;
-
-    document.getElementById('asset-browser-title').textContent = 'Browse Files';
-    document.getElementById('asset-browser-list').innerHTML = '';
-    document.getElementById('asset-browser-breadcrumb').innerHTML = '';
-
-    const hintEl = document.getElementById('asset-browser-hint');
-    hintEl.textContent = 'Upload assets for individual modules or browse the entire Schwung folder.';
-    hintEl.style.display = 'block';
-
-    setAssetStatus('', null);
-    showAssetSpinner(true);
-    document.getElementById('asset-browser-modal').style.display = 'flex';
-
-    refreshAssetListing();
-}
-
-async function refreshAssetListing() {
-    if (!assetBrowser.open) return;
-    assetBrowser.loading = true;
-    showAssetSpinner(true);
-    setAssetStatus('', null);
-
-    try {
-        // Auto-create ensure_dirs when at root
-        if (assetBrowser.currentPath === assetBrowser.basePath && assetBrowser.assets?.ensure_dirs) {
-            for (const dir of assetBrowser.assets.ensure_dirs) {
-                await enqueueModuleOp(async () => {
-                    return await window.installer.invoke('create_remote_dir', {
-                        hostname: state.deviceIp,
-                        remotePath: assetBrowser.basePath + '/' + dir
-                    });
-                });
-            }
-        }
-
-        const entries = await enqueueModuleOp(async () => {
-            return await window.installer.invoke('list_remote_dir', {
-                hostname: state.deviceIp,
-                remotePath: assetBrowser.currentPath
-            });
-        });
-        renderAssetList(entries);
-        renderBreadcrumb();
-        updateAssetToolbarVisibility();
-        setAssetStatus(`${entries.length} item${entries.length !== 1 ? 's' : ''}`, null);
-    } catch (err) {
-        console.error('Failed to list remote dir:', err);
-        setAssetStatus('Failed to load directory', 'error');
-        renderAssetList([]);
-        renderBreadcrumb();
-        updateAssetToolbarVisibility();
-    } finally {
-        assetBrowser.loading = false;
-    }
-}
-
-function updateAssetToolbarVisibility() {
-    const atRoot = isAssetBrowserAtRoot();
-    document.getElementById('asset-browser-upload').style.display = atRoot ? 'none' : '';
-    document.getElementById('asset-browser-mkdir').style.display = atRoot ? 'none' : '';
-}
-
-function renderAssetList(entries) {
-    const listEl = document.getElementById('asset-browser-list');
-    const atRoot = isAssetBrowserAtRoot();
-
-    // At module root, only show directories (hide nam.so, module.json, etc.)
-    if (atRoot) {
-        entries = entries.filter(e => e.isDirectory);
-    }
-
-    if (entries.length === 0) {
-        listEl.innerHTML = '<div class="asset-list-empty">Empty directory</div>';
-        return;
-    }
-
-    listEl.innerHTML = '';
-    entries.forEach(entry => {
-        const row = document.createElement('div');
-        row.className = 'asset-entry' + (entry.isDirectory ? ' is-directory' : '');
-
-        const icon = document.createElement('span');
-        icon.className = 'asset-entry-icon';
-        icon.textContent = entry.isDirectory ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
-
-        const name = document.createElement('span');
-        name.className = 'asset-entry-name';
-        name.textContent = entry.name;
-        if (entry.isDirectory) {
-            name.onclick = () => navigateToSubdir(entry.name);
-        }
-
-        const size = document.createElement('span');
-        size.className = 'asset-entry-size';
-        size.textContent = entry.isDirectory ? '' : formatFileSize(entry.size);
-
-        row.appendChild(icon);
-        row.appendChild(name);
-        row.appendChild(size);
-
-        // Download button for files (not directories, not at root)
-        if (!entry.isDirectory && !atRoot) {
-            const dlBtn = document.createElement('button');
-            dlBtn.className = 'asset-entry-download';
-            dlBtn.textContent = '\u2B07';
-            dlBtn.title = 'Download';
-            dlBtn.onclick = () => handleDownloadAssetEntry(entry.name);
-            row.appendChild(dlBtn);
-        }
-
-        // Hide delete button at root to prevent deleting top-level dirs
-        if (!atRoot) {
-            const delBtn = document.createElement('button');
-            delBtn.className = 'asset-entry-delete';
-            delBtn.textContent = '\u2715';
-            delBtn.title = 'Delete';
-            delBtn.onclick = () => handleDeleteAssetEntry(entry.name, entry.isDirectory);
-            row.appendChild(delBtn);
-        }
-
-        listEl.appendChild(row);
-    });
-}
-
-function renderBreadcrumb() {
-    const el = document.getElementById('asset-browser-breadcrumb');
-    const base = assetBrowser.basePath;
-    const current = assetBrowser.currentPath;
-
-    // Get the relative path from base
-    const relativeParts = current.slice(base.length).split('/').filter(Boolean);
-
-    // Build segments: base label + each subdirectory
-    const segments = [];
-    const baseLabel = assetBrowser.assets ? assetBrowser.assets.label : 'Assets';
-
-    // Root segment
-    if (relativeParts.length === 0) {
-        segments.push({ label: baseLabel, path: base, isCurrent: true });
-    } else {
-        segments.push({ label: baseLabel, path: base, isCurrent: false });
-        relativeParts.forEach((part, i) => {
-            const path = base + '/' + relativeParts.slice(0, i + 1).join('/');
-            segments.push({
-                label: part,
-                path: path,
-                isCurrent: i === relativeParts.length - 1
-            });
-        });
-    }
-
-    el.innerHTML = '';
-    segments.forEach((seg, i) => {
-        if (i > 0) {
-            const sep = document.createElement('span');
-            sep.className = 'breadcrumb-sep';
-            sep.textContent = '/';
-            el.appendChild(sep);
-        }
-        const span = document.createElement('span');
-        span.textContent = seg.label;
-        if (seg.isCurrent) {
-            span.className = 'current';
-        } else {
-            span.onclick = () => {
-                assetBrowser.currentPath = seg.path;
-                refreshAssetListing();
-            };
-        }
-        el.appendChild(span);
-    });
-}
-
-function navigateToSubdir(name) {
-    assetBrowser.currentPath = assetBrowser.currentPath + '/' + name;
-    refreshAssetListing();
-}
-
-async function handleDownloadAssetEntry(name) {
-    setAssetStatus(`Downloading ${name}...`, 'uploading');
-    try {
-        const fullPath = assetBrowser.currentPath + '/' + name;
-        const result = await window.installer.invoke('download_remote_file', {
-            hostname: state.deviceIp,
-            remotePath: fullPath,
-            defaultName: name
-        });
-        if (result.canceled) {
-            setAssetStatus('', null);
-        } else {
-            setAssetStatus(`Downloaded ${name}`, null);
-        }
-    } catch (err) {
-        console.error('Download failed:', err);
-        setAssetStatus('Download failed: ' + err.message, 'error');
-    }
-}
-
-async function handleDeleteAssetEntry(name, isDir) {
-    const type = isDir ? 'folder' : 'file';
-    if (!confirm(`Delete ${type} "${name}"?${isDir ? ' This will delete all contents.' : ''}`)) return;
-
-    showAssetSpinner(true);
-    setAssetStatus(`Deleting ${name}...`, 'uploading');
-    try {
-        const fullPath = assetBrowser.currentPath + '/' + name;
-        await enqueueModuleOp(async () => {
-            return await window.installer.invoke('delete_remote_path', {
-                hostname: state.deviceIp,
-                remotePath: fullPath
-            });
-        });
-        await refreshAssetListing();
-    } catch (err) {
-        console.error('Delete failed:', err);
-        showAssetSpinner(false);
-        setAssetStatus('Delete failed: ' + err.message, 'error');
-    }
-}
-
-async function handleAssetBrowserUpload() {
-    const pickResult = await window.installer.invoke('pick_asset_files', {
-        extensions: assetBrowser.assets ? assetBrowser.assets.extensions : [],
-        label: assetBrowser.assets ? assetBrowser.assets.label : 'Assets',
-        allowFolders: assetBrowser.assets ? !!assetBrowser.assets.allowFolders : false
-    });
-
-    if (pickResult.canceled || pickResult.filePaths.length === 0) return;
-    await uploadFilesToCurrentDir(pickResult.filePaths);
-}
-
-async function uploadFilesToCurrentDir(filePaths) {
-    showAssetSpinner(true);
-    setAssetStatus(`Uploading ${filePaths.length} item${filePaths.length !== 1 ? 's' : ''}...`, 'uploading');
-
-    try {
-        const results = await enqueueModuleOp(async () => {
-            return await window.installer.invoke('upload_assets', {
-                filePaths: filePaths,
-                remoteDir: assetBrowser.currentPath,
-                hostname: state.deviceIp
-            });
-        });
-
-        const failed = results.filter(r => !r.success);
-        if (failed.length > 0) {
-            const failedNames = failed.map(f => f.file).join(', ');
-            setAssetStatus(`Upload failed for: ${failedNames}`, 'error');
-        }
-
-        await refreshAssetListing();
-    } catch (err) {
-        console.error('Upload failed:', err);
-        showAssetSpinner(false);
-        setAssetStatus('Upload failed: ' + err.message, 'error');
-    }
-}
-
-async function handleAssetBrowserMkdir() {
-    const name = prompt('New folder name:');
-    if (!name || !name.trim()) return;
-
-    const folderName = name.trim();
-    // Basic validation
-    if (folderName.includes('/') || folderName.includes('\\')) {
-        setAssetStatus('Folder name cannot contain slashes', 'error');
-        return;
-    }
-
-    showAssetSpinner(true);
-    setAssetStatus(`Creating folder "${folderName}"...`, 'uploading');
-    try {
-        const fullPath = assetBrowser.currentPath + '/' + folderName;
-        await enqueueModuleOp(async () => {
-            return await window.installer.invoke('create_remote_dir', {
-                hostname: state.deviceIp,
-                remotePath: fullPath
-            });
-        });
-        await refreshAssetListing();
-    } catch (err) {
-        console.error('Create folder failed:', err);
-        showAssetSpinner(false);
-        setAssetStatus('Failed to create folder: ' + err.message, 'error');
-    }
-}
-
-function updateInstallButtonState() {
-    const installButton = document.getElementById('btn-install');
-    if (!installButton) return;
-
-    if (state.installType === 'custom') {
-        installButton.disabled = state.selectedModules.length === 0;
-    } else {
-        installButton.disabled = false;
-    }
-}
-
 // Installation
 function initializeChecklist(modules) {
     const checklist = document.getElementById('install-checklist');
@@ -2201,7 +714,7 @@ function initializeChecklist(modules) {
     // Render checklist
     checklist.innerHTML = items.map(item => `
         <div class="checklist-item" data-item-id="${item.id}">
-            <div class="checklist-icon pending">○</div>
+            <div class="checklist-icon pending">\u25CB</div>
             <div class="checklist-item-text">${item.name}</div>
         </div>
     `).join('');
@@ -2223,131 +736,57 @@ function updateChecklistItem(itemId, status) {
 
     // Update icon
     if (status === 'pending') {
-        icon.innerHTML = '○';
+        icon.innerHTML = '\u25CB';
     } else if (status === 'in-progress') {
         icon.innerHTML = '<div class="spinner"></div>';
     } else if (status === 'completed') {
-        icon.innerHTML = '✓';
+        icon.innerHTML = '\u2713';
     }
 }
 
 async function startInstallation() {
     showScreen('installing');
-
     try {
-        // Determine which modules to install (fresh install mode only)
-        let modulesToInstall = [];
-        if (state.installType === 'complete') {
-            modulesToInstall = state.allModules.map(m => m.id);
-        } else if (state.installType === 'custom') {
-            modulesToInstall = state.selectedModules;
-        }
+        // Core-only checklist
+        initializeChecklist([]);
 
-        // Get module objects for checklist
-        const moduleObjects = state.allModules.filter(m => modulesToInstall.includes(m.id));
-
-        // Initialize checklist
-        initializeChecklist(moduleObjects);
-
-        // Setup SSH config
         updateInstallProgress('Setting up SSH configuration...', 0);
         await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
 
-        let startProgressForModules = 10;
+        updateInstallProgress('Fetching latest release...', 10);
+        const release = await window.installer.invoke('get_latest_release');
 
-        // Always install core in fresh install mode
-        {
-            // Get latest release info
-            updateInstallProgress('Fetching latest release...', 5);
-            const release = await window.installer.invoke('get_latest_release');
+        updateInstallProgress('Downloading ' + release.asset_name + '...', 20);
+        const tarballPath = await window.installer.invoke('download_release', {
+            url: release.download_url,
+            destPath: '/tmp/' + release.asset_name
+        });
 
-            // Download main package
-            updateInstallProgress(`Downloading ${release.asset_name}...`, 10);
-            const mainTarballPath = await window.installer.invoke('download_release', {
-                url: release.download_url,
-                destPath: `/tmp/${release.asset_name}`
-            });
+        const installFlags = [];
+        if (state.enableScreenReader) installFlags.push('--enable-screen-reader');
 
-            // Determine installation flags based on mode
-            const installFlags = [];
-            if (state.enableScreenReader) {
-                installFlags.push('--enable-screen-reader');
-            }
+        updateChecklistItem('core', 'in-progress');
+        updateInstallProgress('Installing Schwung...', 40);
+        await window.installer.invoke('install_main', {
+            tarballPath: tarballPath,
+            hostname: state.deviceIp,
+            flags: installFlags
+        });
+        updateChecklistItem('core', 'completed');
 
-            // Install main package
-            const coreAction = 'Installing';
-            updateChecklistItem('core', 'in-progress');
-            updateInstallProgress(`${coreAction} Schwung core...`, 30);
-            await window.installer.invoke('install_main', {
-                tarballPath: mainTarballPath,
-                hostname: state.deviceIp,
-                flags: installFlags
-            });
-            updateChecklistItem('core', 'completed');
-            startProgressForModules = 50;
-        }
-
-        // Install modules (if any)
-        if (modulesToInstall.length > 0) {
-            // Fix permissions before module installs (root-owned dirs from core install)
-            updateInstallProgress('Fixing file permissions...', startProgressForModules);
-            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
-
-            updateInstallProgress('Fetching module catalog...', startProgressForModules);
-            const modules = state.allModules;
-
-            const moduleCount = modulesToInstall.length;
-            const remainingProgress = 100 - startProgressForModules;
-            const progressPerModule = remainingProgress / moduleCount;
-
-            // Install each module
-            for (let i = 0; i < moduleCount; i++) {
-                const moduleId = modulesToInstall[i];
-                const module = modules.find(m => m.id === moduleId);
-
-                if (module) {
-                    const baseProgress = startProgressForModules + (i * progressPerModule);
-
-                    // Determine if this is an upgrade or fresh install
-                    const isUpgrade = state.installedModules.some(m => m.id === module.id);
-                    const action = isUpgrade ? 'Upgrading' : 'Installing';
-
-                    updateChecklistItem(module.id, 'in-progress');
-                    updateInstallProgress(`Downloading ${module.name} (${i + 1}/${moduleCount})...`, baseProgress);
-                    const moduleTarballPath = await window.installer.invoke('download_release', {
-                        url: module.download_url,
-                        destPath: `/tmp/${module.asset_name}`
-                    });
-
-                    updateInstallProgress(`${action} ${module.name} (${i + 1}/${moduleCount})...`, baseProgress + progressPerModule * 0.5);
-                    await window.installer.invoke('install_module_package', {
-                        moduleId: module.id,
-                        tarballPath: moduleTarballPath,
-                        componentType: module.component_type,
-                        hostname: state.deviceIp
-                    });
-                    updateChecklistItem(module.id, 'completed');
-                }
-            }
-        }
-
-        // Installation complete
         updateInstallProgress('Installation complete!', 100);
-        setTimeout(() => {
+        setTimeout(function() {
             populateSuccessScreen();
             showScreen('success');
         }, 500);
     } catch (error) {
-        state.errors.push({
-            timestamp: new Date().toISOString(),
-            message: error.toString()
-        });
+        state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
         showError('Installation failed: ' + error);
     }
 }
 
 function populateSuccessScreen(options = {}) {
-    const { isUpgrade = false, isUninstall = false, isReenable = false, isRepair = false } = options;
+    const { isUninstall = false, isReenable = false, isRepair = false } = options;
     const container = document.getElementById('success-next-steps');
     const backBtn = document.getElementById('btn-back-manage');
     const instructionEl = document.querySelector('#screen-success .instruction');
@@ -2388,15 +827,6 @@ function populateSuccessScreen(options = {}) {
         return;
     }
 
-    if (isUpgrade) {
-        document.querySelector('#screen-success h1').textContent = 'Upgrade Complete';
-        instructionEl.textContent = 'Your modules have been upgraded successfully.';
-        container.innerHTML = restartNotice;
-        container.style.display = '';
-        backBtn.style.display = '';
-        return;
-    }
-
     // Fresh install
     document.querySelector('#screen-success h1').textContent = "You're All Set!";
     instructionEl.textContent = 'Schwung has been successfully installed on your device.';
@@ -2407,7 +837,6 @@ function populateSuccessScreen(options = {}) {
 
     html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Track</strong> or <strong style="color: #0066cc;">Shift + Vol + Menu</strong> &mdash; Access track and master slots</li>';
     html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Jog Click</strong> &mdash; Access overtake modules</li>';
-
 
     if (state.enableScreenReader) {
         html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Menu</strong> &mdash; Toggle screen reader on and off</li>';
@@ -2527,8 +956,7 @@ function parseError(error) {
             canCleanTmp: true,
             suggestions: [
                 'Click "Clean Up & Retry" below to remove temp files from your device and try again',
-                'Free up space by deleting unused samples or sets',
-                'Try installing fewer modules (use Custom mode)'
+                'Free up space by deleting unused samples or sets'
             ]
         };
     }
@@ -2578,7 +1006,6 @@ function retryInstallation() {
     state.currentScreen = 'discovery';
     state.deviceIp = null;
     state.authCode = null;
-    state.selectedModules = [];
     state.sshPassword = null;
     state.errors = [];
 
@@ -2590,6 +1017,15 @@ function retryInstallation() {
 function closeApplication() {
     window.close();
 }
+
+// --- WiFi Manager State ---
+const wifiManager = {
+    open: false,
+    loading: false,
+    networks: [],
+    isUsbConnection: false,
+    passwordTarget: null
+};
 
 // --- WiFi Manager Functions ---
 
@@ -2646,6 +1082,12 @@ function setWifiStatus(text, cssClass) {
     textEl.textContent = text;
 }
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 async function wifiDoScan() {
     const scanBtn = document.getElementById('wifi-scan-btn');
     scanBtn.disabled = true;
@@ -2672,12 +1114,6 @@ async function wifiDoScan() {
         scanBtn.disabled = false;
         scanBtn.textContent = 'Scan for Networks';
     }
-}
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
 }
 
 function showWifiNetworkList(networks) {
@@ -2976,15 +1412,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Confirm screen
     document.getElementById('btn-cancel-confirm').onclick = cancelConfirmation;
 
-    // Management mode buttons
-    document.getElementById('btn-upgrade-all').onclick = handleUpgradeAll;
-
     // Secondary action links
-    document.getElementById('link-browse-files').onclick = (e) => {
-        e.preventDefault();
-        openGlobalFileBrowser();
-    };
-
     document.getElementById('link-screenreader').onclick = async (e) => {
         e.preventDefault();
         const link = e.target;
@@ -3073,7 +1501,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'Re-enable cannot continue because the core payload is missing from /data/UserData/schwung.\n\nReinstall Schwung core now?'
                 );
                 if (shouldReinstall) {
-                    await handleUpgradeCore();
+                    // Reinstall core via startSshRepair-like flow
+                    await startSshRepair();
                     return;
                 }
             }
@@ -3084,26 +1513,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('link-repair').onclick = async (e) => {
         e.preventDefault();
-        const vi = state.versionInfo;
-        if (!vi) return;
 
-        // Build list: core + all installed modules
-        const allInstalled = [...(vi.upgradableModules || []), ...(vi.upToDateModules || [])];
-        const items = ['Core', ...allInstalled.map(m => m.name)];
-
-        if (!confirm(`Repair installation? This will reinstall:\n\n${items.join('\n')}`)) return;
+        if (!confirm('Repair installation? This will reinstall Schwung core.')) return;
 
         showScreen('installing');
         try {
-            // Build checklist
+            // Build checklist - core only
             const checklist = document.getElementById('install-checklist');
-            const allItems = [{ id: 'core', name: 'Schwung Core' }, ...allInstalled.map(m => ({ id: m.id, name: m.name }))];
-            checklist.innerHTML = allItems.map(item => `
-                <div class="checklist-item" data-item-id="${item.id}">
+            checklist.innerHTML = `
+                <div class="checklist-item" data-item-id="core">
                     <div class="checklist-icon pending">\u25CB</div>
-                    <div class="checklist-item-text">${item.name}</div>
+                    <div class="checklist-item-text">Schwung Core</div>
                 </div>
-            `).join('');
+            `;
 
             updateInstallProgress('Setting up SSH configuration...', 0);
             await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
@@ -3119,7 +1541,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 destPath: `/tmp/${release.asset_name}`
             });
 
-            updateInstallProgress('Reinstalling Schwung core...', 20);
+            updateInstallProgress('Reinstalling Schwung core...', 30);
             const installFlags = [];
             if (state.enableScreenReader) installFlags.push('--enable-screen-reader');
 
@@ -3130,40 +1552,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             updateChecklistItem('core', 'completed');
 
-            // Fix permissions before module installs (root-owned dirs from core install)
-            if (allInstalled.length > 0) {
-                updateInstallProgress('Fixing file permissions...', 29);
-                await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
-            }
-
-            // Reinstall each module
-            if (allInstalled.length > 0) {
-                const progressPerModule = 60 / allInstalled.length;
-                for (let i = 0; i < allInstalled.length; i++) {
-                    const module = allInstalled[i];
-                    const baseProgress = 30 + (i * progressPerModule);
-
-                    updateChecklistItem(module.id, 'in-progress');
-                    updateInstallProgress(`Downloading ${module.name} (${i + 1}/${allInstalled.length})...`, baseProgress);
-                    const tarballPath = await window.installer.invoke('download_release', {
-                        url: module.download_url,
-                        destPath: `/tmp/${module.asset_name}`
-                    });
-
-                    updateInstallProgress(`Reinstalling ${module.name} (${i + 1}/${allInstalled.length})...`, baseProgress + progressPerModule * 0.5);
-                    await window.installer.invoke('install_module_package', {
-                        moduleId: module.id,
-                        tarballPath,
-                        componentType: module.component_type,
-                        hostname: state.deviceIp
-                    });
-                    updateChecklistItem(module.id, 'completed');
-                }
-            }
+            // Fix permissions
+            updateInstallProgress('Fixing file permissions...', 80);
+            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
 
             updateInstallProgress('Repair complete!', 100);
             setTimeout(() => {
-                populateSuccessScreen({ isUpgrade: true });
+                populateSuccessScreen({ isRepair: true });
                 showScreen('success');
             }, 500);
         } catch (error) {
@@ -3204,12 +1599,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Success screen
     document.getElementById('btn-done').onclick = closeApplication;
-    document.getElementById('btn-back-manage').onclick = () => checkVersions();
+    document.getElementById('btn-back-manage').onclick = () => checkIfInstalled();
     document.getElementById('btn-start-over').onclick = () => {
         // Reset state for fresh install
         state.managementMode = false;
-        state.installedModules = [];
-        state.versionInfo = null;
         showScreen('discovery');
         startDeviceDiscovery();
     };
@@ -3250,33 +1643,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('btn-export-logs').onclick = (e) => { e.preventDefault(); exportLogs(); };
     document.getElementById('btn-export-logs-error').onclick = exportLogs;
 
-    // Asset browser modal events
-    document.getElementById('asset-browser-close').onclick = closeAssetBrowser;
-    document.getElementById('asset-browser-upload').onclick = handleAssetBrowserUpload;
-    document.getElementById('asset-browser-mkdir').onclick = handleAssetBrowserMkdir;
-
-    // Close modal on backdrop click
-    document.getElementById('asset-browser-modal').onclick = (e) => {
-        if (e.target.id === 'asset-browser-modal') closeAssetBrowser();
-    };
-
-    // Custom module modal events
-    document.getElementById('custom-module-close').onclick = closeCustomModuleModal;
-    document.getElementById('custom-module-browse').onclick = handleCustomModuleBrowse;
-    document.getElementById('custom-module-install').onclick = handleCustomModuleInstall;
-    document.getElementById('custom-module-modal').onclick = (e) => {
-        if (e.target.id === 'custom-module-modal') closeCustomModuleModal();
-    };
-    document.getElementById('custom-module-source').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleCustomModuleInstall();
-    });
-
     // Close modal on Escape key
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            if (document.getElementById('custom-module-modal').style.display !== 'none') closeCustomModuleModal();
-            else if (wifiManager.open) closeWifiManager();
-            else if (assetBrowser.open) closeAssetBrowser();
+            if (wifiManager.open) closeWifiManager();
         }
     });
 
@@ -3295,48 +1665,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     document.getElementById('wifi-password-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') wifiPasswordSubmit();
-    });
-
-    // Drag-and-drop on asset browser dropzone
-    const dropzone = document.getElementById('asset-browser-dropzone');
-    let dragCounter = 0;
-
-    dropzone.addEventListener('dragenter', (e) => {
-        e.preventDefault();
-        dragCounter++;
-        dropzone.classList.add('drag-over');
-        document.getElementById('asset-browser-drop-hint').style.display = 'flex';
-    });
-
-    dropzone.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        dragCounter--;
-        if (dragCounter <= 0) {
-            dragCounter = 0;
-            dropzone.classList.remove('drag-over');
-            document.getElementById('asset-browser-drop-hint').style.display = 'none';
-        }
-    });
-
-    dropzone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-    });
-
-    dropzone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dragCounter = 0;
-        dropzone.classList.remove('drag-over');
-        document.getElementById('asset-browser-drop-hint').style.display = 'none';
-
-        if (!assetBrowser.open) return;
-
-        const files = Array.from(e.dataTransfer.files);
-        if (files.length === 0) return;
-
-        const filePaths = files.map(f => window.installer.getPathForFile(f)).filter(Boolean);
-        if (filePaths.length > 0) {
-            uploadFilesToCurrentDir(filePaths);
-        }
     });
 
     // Start on warning screen - user must accept before proceeding
