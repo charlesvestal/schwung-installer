@@ -106,6 +106,10 @@ ipcMain.handle('test_ssh', async (event, { hostname }) => {
     return await backend.testSsh(hostname);
 });
 
+ipcMain.handle('try_ssh_fallback', async (event, { hostname }) => {
+    return await backend.trySshFallback(hostname);
+});
+
 ipcMain.handle('setup_ssh_config', async (event, { hostname } = {}) => {
     return backend.setupSshConfig(hostname);
 });
