@@ -114,14 +114,6 @@ ipcMain.handle('setup_ssh_config', async (event, { hostname } = {}) => {
     return backend.setupSshConfig(hostname);
 });
 
-ipcMain.handle('check_git_bash_available', async () => {
-    return await backend.checkGitBashAvailable();
-});
-
-ipcMain.handle('get_module_catalog', async () => {
-    return await backend.getModuleCatalog();
-});
-
 ipcMain.handle('get_latest_release', async () => {
     return await backend.getLatestRelease();
 });
@@ -138,93 +130,6 @@ ipcMain.handle('install_main', async (event, { tarballPath, hostname, flags }) =
     return await backend.installMain(tarballPath, hostname, flags);
 });
 
-ipcMain.handle('install_module_package', async (event, { moduleId, tarballPath, componentType, hostname }) => {
-    return await backend.installModulePackage(moduleId, tarballPath, componentType, hostname);
-});
-
-ipcMain.handle('install_module_batch', async (event, { modules, hostname }) => {
-    const progressCallback = (progress) => {
-        event.sender.send('batch-install-progress', progress);
-    };
-    return await backend.installModuleBatch(modules, hostname, progressCallback);
-});
-
-ipcMain.handle('remove_module', async (event, { moduleId, componentType, hostname }) => {
-    return await backend.removeModulePackage(moduleId, componentType, hostname);
-});
-
-ipcMain.handle('install_custom_module', async (event, { source, hostname }) => {
-    return await backend.installCustomModule(source, hostname);
-});
-
-ipcMain.handle('pick_tarball', async () => {
-    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
-        title: 'Select Module Tarball',
-        properties: ['openFile'],
-        filters: [
-            { name: 'Tarballs', extensions: ['gz', 'tgz'] },
-            { name: 'All Files', extensions: ['*'] }
-        ]
-    });
-    if (canceled || filePaths.length === 0) {
-        return { canceled: true };
-    }
-    return { canceled: false, filePath: filePaths[0] };
-});
-
-ipcMain.handle('pick_asset_files', async (event, { extensions, label, allowFolders }) => {
-    const filters = [];
-    if (extensions && extensions.length > 0) {
-        filters.push({
-            name: label || 'Asset Files',
-            extensions: extensions.map(ext => ext.replace(/^\./, ''))
-        });
-    }
-    filters.push({ name: 'All Files', extensions: ['*'] });
-
-    const properties = ['openFile', 'multiSelections'];
-    if (allowFolders) {
-        properties.push('openDirectory');
-    }
-
-    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
-        title: `Add ${label || 'Assets'}`,
-        properties,
-        filters
-    });
-
-    if (canceled || filePaths.length === 0) {
-        return { canceled: true, filePaths: [] };
-    }
-    return { canceled: false, filePaths };
-});
-
-ipcMain.handle('upload_assets', async (event, { filePaths, remoteDir, hostname }) => {
-    return await backend.uploadModuleAssets(filePaths, remoteDir, hostname);
-});
-
-ipcMain.handle('list_remote_dir', async (event, { hostname, remotePath }) => {
-    return await backend.listRemoteDir(hostname, remotePath);
-});
-
-ipcMain.handle('delete_remote_path', async (event, { hostname, remotePath }) => {
-    return await backend.deleteRemotePath(hostname, remotePath);
-});
-
-ipcMain.handle('create_remote_dir', async (event, { hostname, remotePath }) => {
-    return await backend.createRemoteDir(hostname, remotePath);
-});
-
-ipcMain.handle('download_remote_file', async (event, { hostname, remotePath, defaultName }) => {
-    const result = await dialog.showSaveDialog(mainWindow, {
-        defaultPath: defaultName || 'download',
-        title: 'Save File As'
-    });
-    if (result.canceled) return { canceled: true };
-    await backend.downloadRemoteFile(hostname, remotePath, result.filePath);
-    return { canceled: false, filePath: result.filePath };
-});
-
 ipcMain.handle('check_core_installation', async (event, { hostname }) => {
     return await backend.checkCoreInstallation(hostname);
 });
@@ -237,18 +142,6 @@ ipcMain.handle('reenable_move_everything', async (event, { hostname }) => {
     return await backend.reenableMoveEverything(hostname);
 });
 
-ipcMain.handle('check_installed_versions', async (event, { hostname }) => {
-    // Create progress callback that sends events to frontend
-    const progressCallback = (message) => {
-        event.sender.send('version-check-progress', message);
-    };
-    return await backend.checkInstalledVersions(hostname, progressCallback);
-});
-
-ipcMain.handle('compare_versions', async (event, { installed, latestRelease, moduleCatalog }) => {
-    return backend.compareVersions(installed, latestRelease, moduleCatalog);
-});
-
 ipcMain.handle('get_diagnostics', async (event, { deviceIp, errors }) => {
     return backend.getDiagnostics(deviceIp, errors);
 });
@@ -259,14 +152,6 @@ ipcMain.handle('get_screen_reader_status', async (event, { hostname }) => {
 
 ipcMain.handle('set_screen_reader_state', async (event, { hostname, enabled }) => {
     return await backend.setScreenReaderState(hostname, enabled);
-});
-
-ipcMain.handle('get_standalone_status', async (event, { hostname }) => {
-    return await backend.getStandaloneStatus(hostname);
-});
-
-ipcMain.handle('set_standalone_state', async (event, { hostname, enabled }) => {
-    return await backend.setStandaloneState(hostname, enabled);
 });
 
 ipcMain.handle('uninstall_move_everything', async (event, { hostname }) => {
