@@ -3205,7 +3205,8 @@ async function installCustomModule(source, hostname) {
                 const mjResponse = await httpClient.get(mjUrl);
                 if (mjResponse.status === 200) {
                     const mj = typeof mjResponse.data === 'string' ? JSON.parse(mjResponse.data) : mjResponse.data;
-                    if (mj.component_type) componentType = mj.component_type;
+                    const ct = mj.component_type || (mj.capabilities && mj.capabilities.component_type);
+                    if (ct) componentType = ct;
                     if (mj.id) moduleId = mj.id;
                     if (mj.name) moduleName = mj.name;
                     console.log(`[DEBUG] Custom install: detected component_type=${componentType}, id=${moduleId}`);
@@ -3280,7 +3281,8 @@ async function detectModuleInfoFromTarball(tarballPath) {
         if (moduleJsonEntry) {
             const content = execSync(`tar -xzf "${tarballPath}" -O "${moduleJsonEntry}" 2>/dev/null`, { encoding: 'utf-8' });
             const mj = JSON.parse(content);
-            if (mj.component_type) result.componentType = mj.component_type;
+            const ct = mj.component_type || (mj.capabilities && mj.capabilities.component_type);
+            if (ct) result.componentType = ct;
             if (mj.id) result.moduleId = mj.id;
             if (mj.name) result.moduleName = mj.name;
         }
