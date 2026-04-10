@@ -1,6 +1,6 @@
 {
   "name": "schwung-installer",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Cross-platform installer for Schwung",
   "main": "electron/main.js",
   "scripts": {
