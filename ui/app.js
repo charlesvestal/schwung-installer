@@ -2354,7 +2354,7 @@ function populateSuccessScreen(options = {}) {
 
     const startOverBtn = document.getElementById('btn-start-over');
 
-    const restartNotice = '<p style="margin-top: 1rem; color: #b8b8b8;">The web servers are restarting. After 60 seconds, access Schwung Manager at <a href="http://schwung.local" target="_blank" style="color: #0066cc;">http://schwung.local</a></p>';
+    const restartNotice = '<p style="margin-top: 1rem; color: #b8b8b8;">The web servers are restarting. After 60 seconds, access Schwung Manager at <a href="http://move.local:7700" target="_blank" style="color: #0066cc;">http://move.local:7700</a></p>';
 
     if (isReenable) {
         document.querySelector('#screen-success h1').textContent = 'Re-enabled!';
