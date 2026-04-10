@@ -618,7 +618,6 @@ function getUsablePrivateKeyPath() {
         if (fs.existsSync(key.path)) {
             if (isKeyEncrypted(key.path)) {
                 console.log(`[DEBUG] ${key.name} is passphrase-protected, skipping`);
-                if (key.regenerateOnEncrypted) return null;
                 continue;
             }
             return key.path;
@@ -643,11 +642,8 @@ function findExistingSshKey() {
         if (fs.existsSync(key.pubPath)) {
             if (isKeyEncrypted(key.privPath)) {
                 console.log(`[DEBUG] Found ${key.name}.pub but private key is encrypted, skipping`);
-                if (key.deleteOnEncrypted) {
-                    try { fs.unlinkSync(key.privPath); } catch (e) {}
-                    try { fs.unlinkSync(key.pubPath); } catch (e) {}
-                    return null;
-                }
+                // Never delete keys — the device may only have this public key in authorized_keys.
+                // Deleting it would lock the user out with no recovery path.
                 continue;
             }
             console.log(`[DEBUG] Found ${key.name}.pub`);
