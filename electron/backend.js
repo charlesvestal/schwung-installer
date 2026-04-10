@@ -2633,7 +2633,7 @@ async function uninstallMoveEverything(hostname) {
 
         // Restore stock MoveWebService so move.local works again
         console.log('[DEBUG] Restoring MoveWebService...');
-        await sshExecWithRetry(hostIp, 'for svc in /opt/move/MoveWebServiceOriginal /opt/move-web-service/MoveWebServiceOriginal; do if [ -f "$svc" ]; then dir=$(dirname "$svc"); base=$(basename "$svc" Original); mv "$svc" "$dir/$base"; fi; done', asRoot);
+        await sshExecWithRetry(hostIp, 'for svc in /opt/move/MoveWebServiceOriginal /opt/move-web-service/MoveWebServiceOriginal; do if [ -f "$svc" ]; then dir=$(dirname "$svc"); base=$(basename "$svc" Original); rm -f "$dir/$base"; mv "$svc" "$dir/$base"; fi; done', asRoot);
 
         // Restart the device
         console.log('[DEBUG] Restarting device...');
