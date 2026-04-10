@@ -2604,17 +2604,20 @@ async function uninstallMoveEverything(hostname) {
 
         const asRoot = { username: 'root' };
 
-        // Stop schwung service
-        console.log('[DEBUG] Stopping schwung service...');
+        // Stop schwung services
+        console.log('[DEBUG] Stopping schwung services...');
+        await sshExecWithRetry(hostIp, 'killall schwung-manager 2>/dev/null || true', asRoot);
         await sshExecWithRetry(hostIp, 'systemctl stop schwung 2>/dev/null || killall schwung 2>/dev/null || true', asRoot);
 
         // Remove shim from /usr/lib if it exists
         console.log('[DEBUG] Removing shim library...');
         await sshExecWithRetry(hostIp, 'rm -f /usr/lib/schwung-shim.so', asRoot);
+        await sshExecWithRetry(hostIp, 'rm -f /usr/lib/schwung-web-shim.so', asRoot);
 
         // Remove Schwung directory
         console.log('[DEBUG] Removing Schwung files...');
         await sshExecWithRetry(hostIp, 'rm -rf /data/UserData/schwung', asRoot);
+        await sshExecWithRetry(hostIp, 'rm -f /data/UserData/move-anything', asRoot);  // backwards-compat symlink
 
         // Restore original Move binary if backup exists
         console.log('[DEBUG] Restoring original Move binary...');
@@ -2631,6 +2634,10 @@ async function uninstallMoveEverything(hostname) {
         if (restoreResult === 'no_backup') {
             console.log('[DEBUG] No backup found, original Move binary may already be in place');
         }
+
+        // Restore stock MoveWebService so move.local works again
+        console.log('[DEBUG] Restoring MoveWebService...');
+        await sshExecWithRetry(hostIp, 'for svc in /opt/move/MoveWebServiceOriginal /opt/move-web-service/MoveWebServiceOriginal; do if [ -f "$svc" ]; then dir=$(dirname "$svc"); base=$(basename "$svc" Original); mv "$svc" "$dir/$base"; fi; done', asRoot);
 
         // Restart the device
         console.log('[DEBUG] Restarting device...');
