@@ -2405,7 +2405,10 @@ function populateSuccessScreen(options = {}) {
     let html = '<p><strong>Getting Started:</strong></p>';
     html += '<ul style="margin: 0.5rem 0 0 1.5rem; color: #b8b8b8; list-style: none; padding: 0;">';
 
-    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Track</strong> or <strong style="color: #0066cc;">Shift + Vol + Menu</strong> &mdash; Access track and master slots</li>';
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Hold Track 1&ndash;4</strong> &mdash; Open that slot&rsquo;s editor</li>';
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Hold Note / Session</strong> &mdash; Open Master FX</li>';
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Hold Step 2</strong> &mdash; Open Schwung Settings</li>';
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Step 13</strong> &mdash; Open Tools Menu</li>';
     html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Jog Click</strong> &mdash; Access overtake modules</li>';
 
 
