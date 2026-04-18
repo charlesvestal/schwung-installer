@@ -1095,11 +1095,13 @@ async function getModuleCatalog() {
 
             let version = null;
             let assets = null;
-            let hasModuleJson = false;
+            let found = false;
+            const branch = module.default_branch || 'main';
 
+            // Primary: src/module.json (convention used by most modules — carries
+            // version + optional `assets` field for the asset browser).
             try {
-                console.log(`[DEBUG] Fetching module.json for: ${module.id}`);
-                const branch = module.default_branch || 'main';
+                console.log(`[DEBUG] Fetching src/module.json for: ${module.id}`);
                 const mjResponse = await httpClient.get(
                     `https://raw.githubusercontent.com/${module.github_repo}/${branch}/src/module.json`
                 );
@@ -1107,16 +1109,37 @@ async function getModuleCatalog() {
                     const mj = typeof mjResponse.data === 'string' ? JSON.parse(mjResponse.data) : mjResponse.data;
                     version = mj.version || null;
                     assets = mj.assets || null;
-                    hasModuleJson = true;
-                    console.log(`[DEBUG] Found version ${version} for ${module.id}`);
-                } else {
-                    console.log(`[DEBUG] Skipping module ${module.id}: module.json returned HTTP ${mjResponse.status}`);
+                    found = true;
+                    console.log(`[DEBUG] Found version ${version} for ${module.id} via src/module.json`);
                 }
             } catch (err) {
-                console.log(`[DEBUG] Skipping module ${module.id}: module.json unavailable (${err.message})`);
+                console.log(`[DEBUG] src/module.json unavailable for ${module.id} (${err.message})`);
             }
 
-            if (!hasModuleJson) {
+            // Fallback: release.json at repo root (canonical Module Store
+            // manifest — always present for any module reachable via the Store).
+            // No `assets` field here, but `version` is enough to list the module.
+            if (!found) {
+                try {
+                    console.log(`[DEBUG] Fetching release.json for: ${module.id}`);
+                    const rjResponse = await httpClient.get(
+                        `https://raw.githubusercontent.com/${module.github_repo}/${branch}/release.json`
+                    );
+                    if (rjResponse.status === 200) {
+                        const rj = typeof rjResponse.data === 'string' ? JSON.parse(rjResponse.data) : rjResponse.data;
+                        version = rj.version || null;
+                        found = !!version;
+                        if (found) {
+                            console.log(`[DEBUG] Found version ${version} for ${module.id} via release.json`);
+                        }
+                    }
+                } catch (err) {
+                    console.log(`[DEBUG] release.json unavailable for ${module.id} (${err.message})`);
+                }
+            }
+
+            if (!found) {
+                console.log(`[DEBUG] Skipping module ${module.id}: no src/module.json or release.json`);
                 return null;
             }
 
