@@ -412,7 +412,7 @@ async function validateDevice(baseUrl) {
                 console.log(`[DEBUG] HTTP validation successful (status: ${response.status})`);
             }
 
-            return true;
+            return { valid: true, ip: cachedDeviceIp };
         } catch (err) {
             const errCode = err.code || 'unknown';
             const errMsg = err.message || 'unknown error';

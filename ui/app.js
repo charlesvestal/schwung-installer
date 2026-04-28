@@ -78,8 +78,20 @@ function showScreen(screenName) {
     }
 }
 
+// Holds the active discovery countdown so we can cancel it.
+let discoveryConfirmTimer = null;
+function cancelDiscoveryConfirm() {
+    if (discoveryConfirmTimer) {
+        clearInterval(discoveryConfirmTimer);
+        discoveryConfirmTimer = null;
+    }
+}
+
 // Device Discovery - Try configured hostname first, fall back to manual entry
 async function startDeviceDiscovery() {
+    // Cancel any pending confirm countdown from a previous run
+    cancelDiscoveryConfirm();
+
     // Reset discovery UI state
     document.querySelector('.manual-entry').style.display = 'none';
 
@@ -109,12 +121,8 @@ async function startDeviceDiscovery() {
 
         if (isValid) {
             console.log('[DEBUG]', state.hostname, 'validated successfully');
-            statusDiv.innerHTML = `<p style="color: green;">&#10003; Connected to ${state.hostname}</p>`;
-
-            // Automatically proceed to next step
-            setTimeout(() => {
-                selectDevice(state.hostname);
-            }, 500);
+            const resolvedIp = (result && typeof result === 'object' && result.ip) ? result.ip : null;
+            showDiscoveryConfirm(state.hostname, resolvedIp);
             return;
         }
 
@@ -164,6 +172,80 @@ async function startDeviceDiscovery() {
         `<p style="margin-top: 0.5rem;">Or enter your Move\'s IP address below:</p>`;
     document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
     document.querySelector('.manual-entry').style.display = 'block';
+}
+
+// Show "found device" UI with a short countdown so the user can intervene
+// (important when there are multiple Moves on the network and the resolved
+// one isn't the intended target).
+function showDiscoveryConfirm(hostname, ip) {
+    const statusDiv = document.getElementById('discovery-status');
+    const detail = ip && ip !== hostname ? `${hostname} (${ip})` : hostname;
+    let remaining = 5;
+
+    const render = () => {
+        statusDiv.innerHTML =
+            `<div class="discovery-found" role="status" aria-live="polite">` +
+            `<p class="found-label">&#10003; Found Move at <strong>${escapeHtml(detail)}</strong></p>` +
+            `<p class="found-detail">Have multiple Moves? You can choose a different one.</p>` +
+            `<p class="countdown">Continuing in ${remaining}...</p>` +
+            `<div class="button-row">` +
+            `<button id="btn-discovery-change" class="secondary">Use a Different Move</button>` +
+            `<button id="btn-discovery-continue">Continue Now</button>` +
+            `</div>` +
+            `</div>`;
+        document.getElementById('btn-discovery-continue').onclick = () => {
+            cancelDiscoveryConfirm();
+            selectDevice(hostname);
+        };
+        document.getElementById('btn-discovery-change').onclick = () => {
+            cancelDiscoveryConfirm();
+            const input = document.getElementById('device-hostname');
+            statusDiv.innerHTML =
+                `<p>Enter a different hostname or IP above, then click Connect.</p>`;
+            if (input) {
+                input.focus();
+                input.select();
+            }
+        };
+    };
+
+    render();
+    // Focus the primary "Continue Now" button so Enter or Space confirms.
+    const continueBtn = document.getElementById('btn-discovery-continue');
+    if (continueBtn) continueBtn.focus();
+
+    discoveryConfirmTimer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+            cancelDiscoveryConfirm();
+            selectDevice(hostname);
+            return;
+        }
+        const cd = statusDiv.querySelector('.countdown');
+        if (cd) cd.textContent = `Continuing in ${remaining}...`;
+    }, 1000);
+}
+
+// Build the manager URL using whatever hostname/IP the user actually picked.
+// IP addresses go through verbatim; hostnames use the chosen .local name.
+function getManagerHost() {
+    return (state.hostname && state.hostname.trim()) || 'move.local';
+}
+function getManagerUrl() {
+    return `http://${getManagerHost()}:7700`;
+}
+function updateInstalledInfoLink() {
+    const link = document.getElementById('installed-info-link');
+    if (!link) return;
+    const host = getManagerHost();
+    link.href = getManagerUrl();
+    link.textContent = `${host}:7700`;
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
 }
 
 function displayDevices(devices) {
@@ -621,6 +703,7 @@ async function checkIfInstalled() {
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
         const installedInfo = document.getElementById('installed-info');
         if (installedInfo) installedInfo.style.display = 'block';
+        updateInstalledInfoLink();
 
         // Show version
         const subtitle = document.getElementById('core-version-subtitle');
@@ -793,7 +876,9 @@ function populateSuccessScreen(options = {}) {
 
     const startOverBtn = document.getElementById('btn-start-over');
 
-    const restartNotice = '<p style="margin-top: 1rem; color: #b8b8b8;">The web servers are restarting. After 60 seconds, access Schwung Manager at <a href="http://move.local:7700" target="_blank" style="color: #0066cc;">http://move.local:7700</a></p>';
+    const managerHost = getManagerHost();
+    const managerUrl = getManagerUrl();
+    const restartNotice = `<p style="margin-top: 1rem; color: #b8b8b8;">The web servers are restarting. After 60 seconds, access Schwung Manager at <a href="${managerUrl}" target="_blank" style="color: #0066cc;">${managerHost}:7700</a></p>`;
 
     if (isReenable) {
         document.querySelector('#screen-success h1').textContent = 'Re-enabled!';
@@ -1385,19 +1470,34 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Discovery screen
     document.getElementById('btn-manual-connect').onclick = () => {
-        const ip = document.getElementById('manual-ip').value.trim();
-        if (ip) {
-            selectDevice(ip);
+        const value = document.getElementById('manual-ip').value.trim();
+        if (value) {
+            cancelDiscoveryConfirm();
+            selectDevice(value);
         }
     };
 
-    // Allow Enter key to connect from manual IP input
+    // Allow Enter key to connect from manual entry input
     document.getElementById('manual-ip').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-            const ip = e.target.value.trim();
-            if (ip) {
-                selectDevice(ip);
+            const value = e.target.value.trim();
+            if (value) {
+                cancelDiscoveryConfirm();
+                selectDevice(value);
             }
+        }
+    });
+
+    // Connect button next to the hostname input — re-runs discovery
+    // with whatever the user typed (e.g. move-1.local).
+    document.getElementById('btn-hostname-connect').onclick = () => {
+        cancelDiscoveryConfirm();
+        startDeviceDiscovery();
+    };
+    document.getElementById('device-hostname').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            cancelDiscoveryConfirm();
+            startDeviceDiscovery();
         }
     });
 
