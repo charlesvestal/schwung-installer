@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Expose installer API
 contextBridge.exposeInMainWorld('installer', {
+    // Platform identifier ('darwin', 'win32', 'linux')
+    platform: process.platform,
+
     // Get file path from a dropped File object (Electron 40+)
     getPathForFile: (file) => webUtils.getPathForFile(file),
 

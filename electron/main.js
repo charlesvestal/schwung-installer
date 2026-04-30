@@ -86,6 +86,16 @@ ipcMain.handle('submit_auth_code', async (event, { baseUrl, code }) => {
     return await backend.submitAuthCode(baseUrl, code);
 });
 
+ipcMain.handle('check_git_bash_available', async () => {
+    if (process.platform !== 'win32') return { available: true };
+    try {
+        const bashPath = await backend.findGitBash();
+        return { available: !!bashPath, path: bashPath };
+    } catch (err) {
+        return { available: false, error: err.message };
+    }
+});
+
 ipcMain.handle('find_existing_ssh_key', async () => {
     return backend.findExistingSshKey();
 });

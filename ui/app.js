@@ -427,15 +427,17 @@ async function submitAuthCode() {
         console.log('Auth successful, cookie saved');
 
         // On Windows, check for Git Bash before proceeding
-        const gitBashCheck = await window.installer.invoke('check_git_bash_available');
-        if (!gitBashCheck.available) {
-            showError(
-                'Git Bash is required for installation on Windows.\n\n' +
-                'Please install Git for Windows from:\n' +
-                'https://git-scm.com/download/win\n\n' +
-                'Then restart the installer.'
-            );
-            return;
+        if (window.installer.platform === 'win32') {
+            const gitBashCheck = await window.installer.invoke('check_git_bash_available');
+            if (!gitBashCheck.available) {
+                showError(
+                    'Git Bash is required for installation on Windows.\n\n' +
+                    'Please install Git for Windows from:\n' +
+                    'https://git-scm.com/download/win\n\n' +
+                    'Then restart the installer.'
+                );
+                return;
+            }
         }
 
         // Check for SSH key and show confirmation screen
@@ -931,7 +933,7 @@ function populateSuccessScreen(options = {}) {
     }
 
     html += '</ul>';
-    html += '<p style="margin-top: 1rem;"><a href="https://github.com/charlesvestal/schwung/blob/main/MANUAL.md" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
+    html += '<p style="margin-top: 1rem;"><a href="https://www.schwung.dev/manual.html" target="_blank" style="color: #0066cc;">Read the full manual</a></p>';
     html += restartNotice;
     container.innerHTML = html;
     container.style.display = '';

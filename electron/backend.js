@@ -2582,4 +2582,5 @@ module.exports = {
     wifiDisconnect,
     wifiRemoveService,
     wifiEnableRadio,
+    findGitBash,
 };
