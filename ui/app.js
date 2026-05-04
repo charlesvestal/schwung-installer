@@ -697,11 +697,45 @@ async function checkIfInstalled() {
             state.shimDisabled = false;
         }
 
+        // Check self-heal status (only meaningful if shim is active — if shim
+        // is disabled, the banner already prompts a Re-enable and we'd just
+        // double up). Self-heal isn't installed when /opt/move/Move lacks
+        // the schwung-heal call OR when /data/.../bin/schwung-heal isn't
+        // setuid. Same Repair button fixes both — backend.reenableMoveEverything
+        // chmods the heal binary 4755 + reinstalls the entrypoint.
+        state.selfHealNeedsRepair = false;
+        if (!state.shimDisabled) {
+            try {
+                const healStatus = await window.installer.invoke('check_self_heal_active', { hostname });
+                state.selfHealNeedsRepair = !healStatus.ok;
+            } catch (e) {
+                state.selfHealNeedsRepair = false;
+            }
+        }
+
         document.querySelector('#screen-modules h1').textContent = 'Schwung is Installed';
         const installOptions = document.querySelector('.install-options');
         if (installOptions) installOptions.style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'flex';
-        document.getElementById('reenable-banner').style.display = state.shimDisabled ? 'flex' : 'none';
+        // Banner shows for either case (shim disabled OR self-heal not
+        // installed); same Repair button fixes both. Wording is set
+        // conditionally below so the user knows which problem we found.
+        const showBanner = state.shimDisabled || state.selfHealNeedsRepair;
+        document.getElementById('reenable-banner').style.display = showBanner ? 'flex' : 'none';
+        if (showBanner) {
+            const titleEl = document.querySelector('#reenable-banner .reenable-banner-content strong');
+            const descEl = document.querySelector('#reenable-banner .reenable-banner-content p');
+            const btnEl = document.getElementById('btn-reenable');
+            if (state.shimDisabled) {
+                if (titleEl) titleEl.textContent = 'Schwung is disabled';
+                if (descEl) descEl.textContent = 'The shim hooks on the root partition need to be restored.';
+                if (btnEl) btnEl.textContent = 'Re-enable';
+            } else {
+                if (titleEl) titleEl.textContent = 'Schwung repair needed';
+                if (descEl) descEl.textContent = 'Self-heal isn\u2019t installed; future updates won\u2019t apply correctly.';
+                if (btnEl) btnEl.textContent = 'Repair';
+            }
+        }
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
         const installedInfo = document.getElementById('installed-info');
         if (installedInfo) installedInfo.style.display = 'block';
@@ -1565,7 +1599,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('btn-reenable').onclick = async (e) => {
         e.preventDefault();
-        if (!confirm('Re-enable Schwung?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.')) return;
+        // Same backend path for both states (reenableMoveEverything covers
+        // both shim restoration and self-heal install). Wording matches
+        // whichever problem we detected so the user isn't surprised.
+        const promptMsg = state.selfHealNeedsRepair && !state.shimDisabled
+            ? 'Repair Schwung?\n\nThis will reinstall the entrypoint and self-heal helper on the root partition. No downloads needed — all your modules and settings are already on the device.'
+            : 'Re-enable Schwung?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.';
+        if (!confirm(promptMsg)) return;
 
         showScreen('installing');
         try {

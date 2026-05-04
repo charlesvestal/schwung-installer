@@ -1825,6 +1825,38 @@ async function checkShimActive(hostname) {
     }
 }
 
+// checkSelfHealActive: probes whether Schwung 0.9.10's self-heal is
+// installed and operational. Returns { ok, reason } where ok=true means
+// the boot-time entrypoint includes the schwung-heal call AND the heal
+// binary itself is setuid root. False positives here would nag users
+// without cause; false negatives would leave bootstrap-needed devices
+// silently broken — bias toward "ok" when probes are inconclusive.
+async function checkSelfHealActive(hostname) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+        // 1. Entrypoint at /opt/move/Move must contain "schwung-heal".
+        //    Without it the boot-time mirror never runs.
+        const entryProbe = "grep -q schwung-heal /opt/move/Move 2>/dev/null && echo 'yes' || echo 'no'";
+        const entryHas = (await sshExecWithRetry(hostIp, entryProbe, { username: 'root' })).trim();
+        if (entryHas !== 'yes') {
+            return { ok: false, reason: 'entrypoint_missing_heal' };
+        }
+        // 2. The schwung-heal binary itself must exist AND be setuid root.
+        //    Without setuid the entrypoint runs it as ableton and it exits
+        //    with "not root" — heal never actually fires.
+        const healProbe = "if [ -u /data/UserData/schwung/bin/schwung-heal ]; then echo 'yes'; else echo 'no'; fi";
+        const healOk = (await sshExecWithRetry(hostIp, healProbe, { username: 'root' })).trim();
+        if (healOk !== 'yes') {
+            return { ok: false, reason: 'heal_not_setuid' };
+        }
+        return { ok: true };
+    } catch (err) {
+        // Probe failure (SSH, etc.) — don't claim broken without evidence.
+        console.log('[DEBUG] checkSelfHealActive probe failed (assuming ok):', err.message);
+        return { ok: true, reason: 'probe_failed' };
+    }
+}
+
 async function reenableMoveEverything(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
@@ -1878,6 +1910,21 @@ async function reenableMoveEverything(hostname) {
 
         // Install shimmed entrypoint
         await sshExecWithRetry(hostIp, 'cp /data/UserData/schwung/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
+
+        // Install schwung-heal as setuid root (Schwung 0.9.10+). The boot-time
+        // entrypoint exec's this helper as ableton; the suid bit is what lets
+        // it escalate to root and mirror /data shim/entrypoint to the system
+        // locations on every boot. Without setuid the helper exits "not root"
+        // and self-heal never runs — even though the entrypoint calls it.
+        // Also re-applied AFTER any chown that would clear the bit.
+        const healCheck = await sshExecWithRetry(hostIp, 'test -f /data/UserData/schwung/bin/schwung-heal && echo "yes" || echo "no"');
+        if (healCheck.trim() === 'yes') {
+            await sshExecWithRetry(hostIp, 'chown root:root /data/UserData/schwung/bin/schwung-heal && chmod 4755 /data/UserData/schwung/bin/schwung-heal', { username: 'root' });
+            const healSuidCheck = await sshExecWithRetry(hostIp, 'test -u /data/UserData/schwung/bin/schwung-heal && echo "ok" || echo "no"', { username: 'root' });
+            if (healSuidCheck.trim() !== 'ok') {
+                throw new Error('schwung-heal setuid bit missing after chmod');
+            }
+        }
 
         // MoveWebService wrapper if web shim present
         if (hasWebShim.trim() === 'yes') {
@@ -2564,6 +2611,7 @@ module.exports = {
     installMain,
     checkCoreInstallation,
     checkShimActive,
+    checkSelfHealActive,
     reenableMoveEverything,
     getDiagnostics,
     getScreenReaderStatus,
