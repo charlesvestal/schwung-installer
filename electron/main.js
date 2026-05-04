@@ -148,6 +148,10 @@ ipcMain.handle('check_shim_active', async (event, { hostname }) => {
     return await backend.checkShimActive(hostname);
 });
 
+ipcMain.handle('check_core_update', async (event, { installedVersion }) => {
+    return await backend.checkCoreUpdate(installedVersion);
+});
+
 ipcMain.handle('check_self_heal_active', async (event, { hostname }) => {
     return await backend.checkSelfHealActive(hostname);
 });

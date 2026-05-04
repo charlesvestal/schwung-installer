@@ -1140,6 +1140,32 @@ async function getLatestInstallerRelease() {
     return null;
 }
 
+// checkCoreUpdate: parallels checkInstallerUpdate but for the Schwung
+// core release. Lets the management screen surface "Schwung X.Y.Z
+// available — Update" when the catalog has moved ahead of the device,
+// even when nothing else is broken. Returns null on probe failure (we
+// don't want to nag without evidence of a newer release).
+async function checkCoreUpdate(installedVersion) {
+    if (!installedVersion) return null;
+    try {
+        const response = await httpClient.get(
+            'https://api.github.com/repos/charlesvestal/schwung/releases/latest',
+            { headers: { 'User-Agent': 'MoveEverything-Installer' } }
+        );
+        if (response.status !== 200 || !response.data.tag_name) return null;
+        const latest = response.data.tag_name.replace(/^v/, '');
+        return {
+            updateAvailable: isNewerVersion(latest, installedVersion),
+            latestVersion: latest,
+            installedVersion: installedVersion,
+            url: response.data.html_url
+        };
+    } catch (err) {
+        console.error('[DEBUG] Core version check failed:', err.message);
+        return null;
+    }
+}
+
 async function checkInstallerUpdate(currentVersion) {
     const release = await getLatestInstallerRelease();
     if (!release) return null;
@@ -1826,20 +1852,34 @@ async function checkShimActive(hostname) {
 }
 
 // checkSelfHealActive: probes whether Schwung 0.9.10's self-heal is
-// installed and operational. Returns { ok, reason } where ok=true means
-// the boot-time entrypoint includes the schwung-heal call AND the heal
-// binary itself is setuid root. False positives here would nag users
-// without cause; false negatives would leave bootstrap-needed devices
-// silently broken — bias toward "ok" when probes are inconclusive.
+// installed and operational. Returns:
+//   { ok: bool, reason?: string, dataHasHealBinary: bool }
+//
+// ok=true     — entrypoint calls schwung-heal AND the binary is setuid
+// ok=false    — bootstrap needed (heal not running). The dataHasHealBinary
+//               flag tells the UI which Repair path will work:
+//                 - true  → reenableMoveEverything is sufficient (lightweight)
+//                 - false → /data itself is too old (e.g. shipped 0.9.9
+//                           with no heal binary), needs a full reinstall
+//                           that downloads a release tarball containing
+//                           the heal mechanism.
+//
+// Bias toward ok=true on probe failure (don't nag without evidence).
 async function checkSelfHealActive(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
+        // Whether the heal binary exists at all on disk. Doesn't have to
+        // be setuid — we use this to decide if a lightweight Repair can
+        // succeed or if we need to download a fresh tarball.
+        const hasHealProbe = "test -f /data/UserData/schwung/bin/schwung-heal && echo 'yes' || echo 'no'";
+        const dataHas = (await sshExecWithRetry(hostIp, hasHealProbe, { username: 'root' })).trim() === 'yes';
+
         // 1. Entrypoint at /opt/move/Move must contain "schwung-heal".
         //    Without it the boot-time mirror never runs.
         const entryProbe = "grep -q schwung-heal /opt/move/Move 2>/dev/null && echo 'yes' || echo 'no'";
         const entryHas = (await sshExecWithRetry(hostIp, entryProbe, { username: 'root' })).trim();
         if (entryHas !== 'yes') {
-            return { ok: false, reason: 'entrypoint_missing_heal' };
+            return { ok: false, reason: 'entrypoint_missing_heal', dataHasHealBinary: dataHas };
         }
         // 2. The schwung-heal binary itself must exist AND be setuid root.
         //    Without setuid the entrypoint runs it as ableton and it exits
@@ -1847,13 +1887,13 @@ async function checkSelfHealActive(hostname) {
         const healProbe = "if [ -u /data/UserData/schwung/bin/schwung-heal ]; then echo 'yes'; else echo 'no'; fi";
         const healOk = (await sshExecWithRetry(hostIp, healProbe, { username: 'root' })).trim();
         if (healOk !== 'yes') {
-            return { ok: false, reason: 'heal_not_setuid' };
+            return { ok: false, reason: 'heal_not_setuid', dataHasHealBinary: dataHas };
         }
-        return { ok: true };
+        return { ok: true, dataHasHealBinary: dataHas };
     } catch (err) {
         // Probe failure (SSH, etc.) — don't claim broken without evidence.
         console.log('[DEBUG] checkSelfHealActive probe failed (assuming ok):', err.message);
-        return { ok: true, reason: 'probe_failed' };
+        return { ok: true, reason: 'probe_failed', dataHasHealBinary: false };
     }
 }
 
@@ -2612,6 +2652,7 @@ module.exports = {
     checkCoreInstallation,
     checkShimActive,
     checkSelfHealActive,
+    checkCoreUpdate,
     reenableMoveEverything,
     getDiagnostics,
     getScreenReaderStatus,
