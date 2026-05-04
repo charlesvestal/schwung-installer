@@ -1868,11 +1868,20 @@ async function checkShimActive(hostname) {
 async function checkSelfHealActive(hostname) {
     try {
         const hostIp = cachedDeviceIp || hostname;
-        // Whether the heal binary exists at all on disk. Doesn't have to
-        // be setuid — we use this to decide if a lightweight Repair can
-        // succeed or if we need to download a fresh tarball.
-        const hasHealProbe = "test -f /data/UserData/schwung/bin/schwung-heal && echo 'yes' || echo 'no'";
-        const dataHas = (await sshExecWithRetry(hostIp, hasHealProbe, { username: 'root' })).trim() === 'yes';
+        // dataHasHealBinary tells the UI whether a lightweight Repair
+        // (re-apply files from /data) can fix self-heal — but only if
+        // BOTH the binary exists AND the data-partition entrypoint
+        // contains the schwung-heal call. The binary alone is not
+        // sufficient: a previous install can leave the binary on disk
+        // while a later upgrade overwrites the entrypoint with a 0.9.9
+        // version that doesn't invoke it. Re-applying that entrypoint
+        // would just re-install the broken state. Treat /data as
+        // "ready" only when both halves are in sync.
+        const hasHealBinaryProbe = "test -f /data/UserData/schwung/bin/schwung-heal && echo 'yes' || echo 'no'";
+        const hasHealBinary = (await sshExecWithRetry(hostIp, hasHealBinaryProbe, { username: 'root' })).trim() === 'yes';
+        const entryHasHealProbe = "grep -q schwung-heal /data/UserData/schwung/shim-entrypoint.sh 2>/dev/null && echo 'yes' || echo 'no'";
+        const entryHasHeal = (await sshExecWithRetry(hostIp, entryHasHealProbe, { username: 'root' })).trim() === 'yes';
+        const dataHas = hasHealBinary && entryHasHeal;
 
         // 1. Entrypoint at /opt/move/Move must contain "schwung-heal".
         //    Without it the boot-time mirror never runs.
@@ -2125,6 +2134,17 @@ async function fixPermissions(hostname) {
 
         // Ensure shim has setuid bit (critical for LD_PRELOAD to work)
         await sshExecWithRetry(hostIp, 'chmod u+s /data/UserData/schwung/schwung-shim.so', { username: 'root' });
+
+        // Restore root:root + setuid 4755 on schwung-heal (Schwung 0.9.10+).
+        // The recursive chown above strips setuid by changing the owner;
+        // without this restore the boot-time entrypoint exec's the helper
+        // as ableton and it exits "not root" — self-heal never fires.
+        // Skip silently when the binary isn't present (older Schwung).
+        await sshExecWithRetry(
+            hostIp,
+            'if [ -f /data/UserData/schwung/bin/schwung-heal ]; then chown root:root /data/UserData/schwung/bin/schwung-heal && chmod 4755 /data/UserData/schwung/bin/schwung-heal; fi',
+            { username: 'root' }
+        );
 
         // Ensure executables are executable
         await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/schwung/schwung /data/UserData/schwung/shim-entrypoint.sh /data/UserData/schwung/start.sh /data/UserData/schwung/stop.sh', { username: 'root' });
