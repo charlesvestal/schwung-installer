@@ -716,12 +716,16 @@ async function checkIfInstalled() {
         }
 
         // Core-version probe: surface "Schwung X.Y.Z available" when the
-        // catalog has a newer release than what's installed and nothing
-        // higher-priority is already showing (shim-disabled / self-heal
-        // banners take precedence — same Update button fixes them anyway).
+        // catalog has a newer release than what's installed. Always run
+        // (don't gate on selfHealNeedsRepair) — when both are true we
+        // want Update to win, since the new release inherently fixes the
+        // bootstrap state too. The banner-priority block below handles
+        // which message to show. Skip only when the shim is fully
+        // disabled (Re-enable is the higher-priority action then) or
+        // when we don't have an installed version to compare against.
         state.coreUpdateAvailable = false;
         state.coreLatestVersion = null;
-        if (!state.shimDisabled && !state.selfHealNeedsRepair && coreCheck.core) {
+        if (!state.shimDisabled && coreCheck.core) {
             try {
                 const coreUpd = await window.installer.invoke('check_core_update', { installedVersion: coreCheck.core });
                 if (coreUpd && coreUpd.updateAvailable) {
@@ -735,12 +739,15 @@ async function checkIfInstalled() {
         const installOptions = document.querySelector('.install-options');
         if (installOptions) installOptions.style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'flex';
-        // Banner shows for: shim disabled, self-heal not installed, OR
-        // a newer Schwung core release exists. Same button (`btn-reenable`)
-        // fixes any of them — its click handler routes to either the
-        // lightweight Re-enable or the full reinstall depending on what's
-        // actually needed.
-        const showBanner = state.shimDisabled || state.selfHealNeedsRepair || state.coreUpdateAvailable;
+        // Banner priority (highest first):
+        // 1. shim disabled — system is offline, must Re-enable first
+        // 2. core update available — Update inherently fixes any
+        //    bootstrap state too (the new release contains the heal
+        //    mechanism), so prefer it over a lightweight Repair
+        // 3. self-heal needs repair — only show when no update is
+        //    available; this is the "stuck on latest" case where we
+        //    need to re-apply local files
+        const showBanner = state.shimDisabled || state.coreUpdateAvailable || state.selfHealNeedsRepair;
         document.getElementById('reenable-banner').style.display = showBanner ? 'flex' : 'none';
         if (showBanner) {
             const titleEl = document.querySelector('#reenable-banner .reenable-banner-content strong');
@@ -750,15 +757,15 @@ async function checkIfInstalled() {
                 if (titleEl) titleEl.textContent = 'Schwung is disabled';
                 if (descEl) descEl.textContent = 'The shim hooks on the root partition need to be restored.';
                 if (btnEl) btnEl.textContent = 'Re-enable';
-            } else if (state.selfHealNeedsRepair) {
-                if (titleEl) titleEl.textContent = 'Schwung repair needed';
-                if (descEl) descEl.textContent = 'Self-heal isn\u2019t installed; future updates won\u2019t apply correctly.';
-                if (btnEl) btnEl.textContent = 'Repair';
-            } else {
-                /* Plain core update available. */
+            } else if (state.coreUpdateAvailable) {
                 if (titleEl) titleEl.textContent = 'Schwung ' + state.coreLatestVersion + ' available';
                 if (descEl) descEl.textContent = 'You\u2019re on v' + (coreCheck.core || '?') + '. One click to download the latest release and update.';
                 if (btnEl) btnEl.textContent = 'Update';
+            } else {
+                /* Self-heal needs repair AND no newer release. */
+                if (titleEl) titleEl.textContent = 'Schwung repair needed';
+                if (descEl) descEl.textContent = 'Self-heal isn\u2019t installed; future updates won\u2019t apply correctly.';
+                if (btnEl) btnEl.textContent = 'Repair';
             }
         }
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
@@ -1625,9 +1632,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('btn-reenable').onclick = async (e) => {
         e.preventDefault();
 
-        // Plain core-update path: no breakage detected, just a newer
-        // release exists. Always full reinstall to pick up new files.
-        if (state.coreUpdateAvailable && !state.shimDisabled && !state.selfHealNeedsRepair) {
+        // Click-handler priority mirrors the banner priority:
+        // 1. shim disabled → lightweight Re-enable (handled by the
+        //    fall-through below)
+        // 2. core update available → full reinstall (download). This
+        //    covers the case where self-heal also needs repair, since
+        //    the new release contains the heal mechanism — Update
+        //    inherently fixes a bootstrap state too.
+        // 3. self-heal needs repair, no newer release available:
+        //      a. /data is missing the heal mechanism → full reinstall
+        //         (lightweight Re-enable can't reapply what's not there)
+        //      b. /data has the heal mechanism → lightweight Re-enable
+        if (state.coreUpdateAvailable && !state.shimDisabled) {
             const ok = confirm(
                 'Update Schwung to v' + state.coreLatestVersion + '?\n\n' +
                 'This downloads the latest release and reinstalls the core (~1 minute). Your modules and settings stay intact.'
@@ -1637,11 +1653,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        // Bootstrap-needed AND /data lacks the schwung-heal binary →
-        // lightweight Re-enable can't actually fix the device because
-        // there's nothing in /data to reapply that includes the heal
-        // mechanism. Fall through to the full reinstall (download + run
-        // install.sh) which fetches a release tarball that contains it.
         if (state.selfHealNeedsRepair && !state.shimDisabled && !state.dataHasHealBinary) {
             const ok = confirm(
                 'Repair Schwung?\n\n' +
