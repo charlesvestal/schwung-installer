@@ -704,23 +704,43 @@ async function checkIfInstalled() {
         // setuid. Same Repair button fixes both — backend.reenableMoveEverything
         // chmods the heal binary 4755 + reinstalls the entrypoint.
         state.selfHealNeedsRepair = false;
+        state.dataHasHealBinary = true; // optimistic; falsified below if probe runs
         if (!state.shimDisabled) {
             try {
                 const healStatus = await window.installer.invoke('check_self_heal_active', { hostname });
                 state.selfHealNeedsRepair = !healStatus.ok;
+                state.dataHasHealBinary = !!healStatus.dataHasHealBinary;
             } catch (e) {
                 state.selfHealNeedsRepair = false;
             }
+        }
+
+        // Core-version probe: surface "Schwung X.Y.Z available" when the
+        // catalog has a newer release than what's installed and nothing
+        // higher-priority is already showing (shim-disabled / self-heal
+        // banners take precedence — same Update button fixes them anyway).
+        state.coreUpdateAvailable = false;
+        state.coreLatestVersion = null;
+        if (!state.shimDisabled && !state.selfHealNeedsRepair && coreCheck.core) {
+            try {
+                const coreUpd = await window.installer.invoke('check_core_update', { installedVersion: coreCheck.core });
+                if (coreUpd && coreUpd.updateAvailable) {
+                    state.coreUpdateAvailable = true;
+                    state.coreLatestVersion = coreUpd.latestVersion;
+                }
+            } catch (e) { /* network / probe failure — quietly skip */ }
         }
 
         document.querySelector('#screen-modules h1').textContent = 'Schwung is Installed';
         const installOptions = document.querySelector('.install-options');
         if (installOptions) installOptions.style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'flex';
-        // Banner shows for either case (shim disabled OR self-heal not
-        // installed); same Repair button fixes both. Wording is set
-        // conditionally below so the user knows which problem we found.
-        const showBanner = state.shimDisabled || state.selfHealNeedsRepair;
+        // Banner shows for: shim disabled, self-heal not installed, OR
+        // a newer Schwung core release exists. Same button (`btn-reenable`)
+        // fixes any of them — its click handler routes to either the
+        // lightweight Re-enable or the full reinstall depending on what's
+        // actually needed.
+        const showBanner = state.shimDisabled || state.selfHealNeedsRepair || state.coreUpdateAvailable;
         document.getElementById('reenable-banner').style.display = showBanner ? 'flex' : 'none';
         if (showBanner) {
             const titleEl = document.querySelector('#reenable-banner .reenable-banner-content strong');
@@ -730,10 +750,15 @@ async function checkIfInstalled() {
                 if (titleEl) titleEl.textContent = 'Schwung is disabled';
                 if (descEl) descEl.textContent = 'The shim hooks on the root partition need to be restored.';
                 if (btnEl) btnEl.textContent = 'Re-enable';
-            } else {
+            } else if (state.selfHealNeedsRepair) {
                 if (titleEl) titleEl.textContent = 'Schwung repair needed';
                 if (descEl) descEl.textContent = 'Self-heal isn\u2019t installed; future updates won\u2019t apply correctly.';
                 if (btnEl) btnEl.textContent = 'Repair';
+            } else {
+                /* Plain core update available. */
+                if (titleEl) titleEl.textContent = 'Schwung ' + state.coreLatestVersion + ' available';
+                if (descEl) descEl.textContent = 'You\u2019re on v' + (coreCheck.core || '?') + '. One click to download the latest release and update.';
+                if (btnEl) btnEl.textContent = 'Update';
             }
         }
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
@@ -1599,9 +1624,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('btn-reenable').onclick = async (e) => {
         e.preventDefault();
-        // Same backend path for both states (reenableMoveEverything covers
-        // both shim restoration and self-heal install). Wording matches
-        // whichever problem we detected so the user isn't surprised.
+
+        // Plain core-update path: no breakage detected, just a newer
+        // release exists. Always full reinstall to pick up new files.
+        if (state.coreUpdateAvailable && !state.shimDisabled && !state.selfHealNeedsRepair) {
+            const ok = confirm(
+                'Update Schwung to v' + state.coreLatestVersion + '?\n\n' +
+                'This downloads the latest release and reinstalls the core (~1 minute). Your modules and settings stay intact.'
+            );
+            if (!ok) return;
+            await runFullRepair();
+            return;
+        }
+
+        // Bootstrap-needed AND /data lacks the schwung-heal binary →
+        // lightweight Re-enable can't actually fix the device because
+        // there's nothing in /data to reapply that includes the heal
+        // mechanism. Fall through to the full reinstall (download + run
+        // install.sh) which fetches a release tarball that contains it.
+        if (state.selfHealNeedsRepair && !state.shimDisabled && !state.dataHasHealBinary) {
+            const ok = confirm(
+                'Repair Schwung?\n\n' +
+                'This device needs files that aren\u2019t on the data partition yet, so we\u2019ll download the latest release and reinstall the core (~1 minute). Your modules and settings stay intact.'
+            );
+            if (!ok) return;
+            await runFullRepair();
+            return;
+        }
+
+        // Lightweight path: re-apply what's already on /data.
         const promptMsg = state.selfHealNeedsRepair && !state.shimDisabled
             ? 'Repair Schwung?\n\nThis will reinstall the entrypoint and self-heal helper on the root partition. No downloads needed — all your modules and settings are already on the device.'
             : 'Re-enable Schwung?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.';
@@ -1656,14 +1707,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    document.getElementById('link-repair').onclick = async (e) => {
-        e.preventDefault();
-
-        if (!confirm('Repair installation? This will reinstall Schwung core.')) return;
-
+    // Full reinstall (downloads latest release tarball + runs install.sh).
+    // Used by both the explicit "Repair Installation" link AND the auto-
+    // detect Repair button when /data lacks the schwung-heal binary
+    // (i.e. user is on a release older than 0.9.10 — lightweight Re-enable
+    // can't help because there's no heal mechanism in /data to apply).
+    async function runFullRepair() {
         showScreen('installing');
         try {
-            // Build checklist - core only
             const checklist = document.getElementById('install-checklist');
             checklist.innerHTML = `
                 <div class="checklist-item" data-item-id="core">
@@ -1675,7 +1726,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             updateInstallProgress('Setting up SSH configuration...', 0);
             await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
 
-            // Reinstall core
             updateInstallProgress('Fetching latest release...', 5);
             const release = await window.installer.invoke('get_latest_release');
 
@@ -1697,7 +1747,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             updateChecklistItem('core', 'completed');
 
-            // Fix permissions
             updateInstallProgress('Fixing file permissions...', 80);
             await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
 
@@ -1710,6 +1759,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             state.errors.push({ timestamp: new Date().toISOString(), message: error.toString() });
             showError('Repair failed: ' + error);
         }
+    }
+
+    document.getElementById('link-repair').onclick = async (e) => {
+        e.preventDefault();
+        if (!confirm('Repair installation? This will reinstall Schwung core.')) return;
+        await runFullRepair();
     };
 
     document.getElementById('link-uninstall').onclick = async (e) => {
