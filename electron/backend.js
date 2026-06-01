@@ -1455,19 +1455,27 @@ async function sftpDownload(hostname, remotePath, localPath, { username = 'ablet
 }
 
 async function findGitBash() {
-    const bashPaths = [
+    // Known Git-for-Windows install locations are trusted as-is. The bare 'bash'
+    // on PATH is the dangerous fallback: on many machines it resolves to WSL's
+    // bash, which has a SEPARATE filesystem and SSH environment from Windows —
+    // running install.sh through it reproduces the "key not found / host not
+    // resolvable" failures users have reported. So we verify any PATH-resolved
+    // bash is actually MSYS/MINGW (Git Bash) and never WSL.
+    // Dedupe: PROGRAMFILES usually equals "C:\\Program Files", so without Set()
+    // we'd probe the same file twice and double worst-case latency on machines
+    // without Git Bash (each missing probe is ~2s).
+    const knownPaths = [...new Set([
         'C:\\Program Files\\Git\\bin\\bash.exe',
         'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
         path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
         path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
-        'bash',  // Last resort — could be WSL, but Git Bash paths above should catch most installs
-    ];
+    ])];
 
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
 
-    for (const bashPath of bashPaths) {
+    for (const bashPath of knownPaths) {
         try {
             await execAsync(`"${bashPath}" --version`, { timeout: 2000 });
             console.log('[DEBUG] Found Git Bash at:', bashPath);
@@ -1477,7 +1485,100 @@ async function findGitBash() {
         }
     }
 
+    // Last resort: a 'bash' on PATH — but only if it's genuinely Git Bash.
+    try {
+        const { stdout } = await execAsync(`bash -c "uname -s"`, { timeout: 2000 });
+        const kernel = (stdout || '').trim();
+        if (/^(MINGW|MSYS)/i.test(kernel)) {
+            console.log('[DEBUG] Found Git Bash on PATH (uname:', kernel + ')');
+            return 'bash';
+        }
+        console.log('[DEBUG] PATH bash is not Git Bash (uname:', kernel + ') — ignoring (likely WSL)');
+    } catch (err) {
+        // No usable bash on PATH
+    }
+
     return null;
+}
+
+// ── WSL key sync (Windows) ──────────────────────────────────────────────────
+// The installer creates the SSH key under the Windows profile. WSL has its own
+// filesystem and home, so users who later run scripts from WSL hit
+// "Permission denied (publickey)". We detect WSL and offer to copy the key in.
+// All WSL calls use execFile (no cmd.exe) so paths with spaces don't need
+// fragile Windows shell quoting.
+
+async function detectWsl() {
+    if (process.platform !== 'win32') return { present: false, distros: [] };
+    const { execFile } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFile);
+    try {
+        // `wsl -l -q` lists installed distro names (UTF-16LE, one per line).
+        const { stdout } = await execFileAsync('wsl.exe', ['-l', '-q'], { timeout: 5000, encoding: 'buffer' });
+        const text = Buffer.isBuffer(stdout) ? stdout.toString('utf16le') : String(stdout);
+        const raw = text.split(/\r?\n/).map(s => s.replace(/\0/g, '').trim()).filter(Boolean);
+        // Exclude container-runtime distros (Docker Desktop, Rancher Desktop) —
+        // they're not where users run shells, and on many dev machines they're
+        // first in the list, which would cause us to copy keys into a distro the
+        // user never interacts with.
+        const distros = raw.filter(d => !/^(docker-desktop|rancher-desktop)(-data)?$/i.test(d));
+        return { present: distros.length > 0, distros };
+    } catch (err) {
+        console.log('[DEBUG] WSL detection: not available:', err.message);
+        return { present: false, distros: [] };
+    }
+}
+
+async function isKeyInWsl(distro) {
+    if (process.platform !== 'win32' || !distro) return false;
+    const keyPath = getUsablePrivateKeyPath();
+    if (!keyPath) return false;
+    const keyBase = path.basename(keyPath);
+    const { execFile } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFile);
+    try {
+        const { stdout } = await execFileAsync('wsl.exe',
+            ['-d', distro, 'bash', '-c', `test -f ~/.ssh/'${keyBase}' && echo YES || echo NO`],
+            { timeout: 8000 });
+        return /YES/.test(String(stdout));
+    } catch (err) {
+        return false;
+    }
+}
+
+async function syncKeyToWsl(distro) {
+    const keyPath = getUsablePrivateKeyPath();
+    const keyBase = keyPath ? path.basename(keyPath) : 'move_key';
+    if (process.platform !== 'win32') return { success: false, error: 'Not Windows', keyName: keyBase };
+    if (!distro) return { success: false, error: 'No WSL distro specified', keyName: keyBase };
+    if (!keyPath) return { success: false, error: 'No usable SSH key found to copy', keyName: keyBase };
+
+    const { execFile } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFile);
+    // Quote a path for safe inclusion inside a single-quoted bash string.
+    const shq = (p) => `'${String(p).replace(/'/g, `'\\''`)}'`;
+
+    try {
+        const toWsl = async (winPath) => {
+            const { stdout } = await execFileAsync('wsl.exe', ['-d', distro, 'wslpath', '-u', winPath], { timeout: 5000 });
+            return stdout.trim();
+        };
+        const wslKey = await toWsl(keyPath);
+        let script = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && cp ${shq(wslKey)} ~/.ssh/${shq(keyBase)} && chmod 600 ~/.ssh/${shq(keyBase)}`;
+        if (fs.existsSync(keyPath + '.pub')) {
+            const wslPub = await toWsl(keyPath + '.pub');
+            script += ` && cp ${shq(wslPub)} ~/.ssh/${shq(keyBase + '.pub')} && chmod 644 ~/.ssh/${shq(keyBase + '.pub')}`;
+        }
+        await execFileAsync('wsl.exe', ['-d', distro, 'bash', '-c', script], { timeout: 10000 });
+        console.log('[DEBUG] WSL key sync complete for distro:', distro);
+        return { success: true, distro, keyName: keyBase };
+    } catch (err) {
+        console.log('[DEBUG] WSL key sync failed:', err.message);
+        return { success: false, error: err.message, keyName: keyBase };
+    }
 }
 
 async function installMain(tarballPath, hostname, flags = []) {
@@ -1492,17 +1593,19 @@ async function installMain(tarballPath, hostname, flags = []) {
 
         console.log('[DEBUG] Installing using IP:', cachedDeviceIp);
 
-        // On Windows, check for Git Bash
-        if (process.platform === 'win32') {
-            const bashPath = await findGitBash();
-            if (!bashPath) {
-                throw new Error(
-                    'Git Bash is required for installation on Windows.\n\n' +
-                    'Please install Git for Windows from:\n' +
-                    'https://git-scm.com/download/win\n\n' +
-                    'Then restart the installer.'
-                );
-            }
+        // Resolve bash once and reuse. On Windows this also serves as the Git
+        // Bash gate (the UI already gated via ensureGitBash; this is the
+        // backend-side belt-and-braces — duplicate, kept for direct API
+        // callers). Calling findGitBash() twice wasted ~2s on Windows machines
+        // without Git Bash.
+        const bashPath = process.platform === 'win32' ? await findGitBash() : '/bin/bash';
+        if (process.platform === 'win32' && !bashPath) {
+            throw new Error(
+                'Git Bash is required for installation on Windows.\n\n' +
+                'Please install Git for Windows from:\n' +
+                'https://git-scm.com/download/win\n\n' +
+                'Then restart the installer.'
+            );
         }
 
         const hostIp = cachedDeviceIp;
@@ -1520,9 +1623,6 @@ async function installMain(tarballPath, hostname, flags = []) {
         // Clear stale host keys for this device (e.g. after a reformat)
         await clearStaleHostKeys(hostname);
 
-        // Find bash - use /bin/bash directly on macOS/Linux, find Git Bash on Windows
-        const bashPath = process.platform === 'win32' ? await findGitBash() : '/bin/bash';
-
         // Create temp directory for install script
         const tempDir = path.join(os.tmpdir(), `move-installer-${Date.now()}`);
         await mkdir(tempDir, { recursive: true });
@@ -1534,6 +1634,15 @@ async function installMain(tarballPath, hostname, flags = []) {
             const installScriptUrl = 'https://raw.githubusercontent.com/charlesvestal/schwung/main/scripts/install.sh';
             const response = await httpClient.get(installScriptUrl);
             let installScriptContent = response.data;
+            // httpClient has validateStatus: () => true, so we must check ourselves —
+            // otherwise a 404/5xx HTML body would be written to disk as install.sh and
+            // executed. Also sanity-check the content is actually a shell script.
+            if (response.status !== 200) {
+                throw new Error(`Failed to download install.sh: HTTP ${response.status}`);
+            }
+            if (typeof installScriptContent !== 'string' || !installScriptContent.startsWith('#!')) {
+                throw new Error(`install.sh download returned unexpected content (not a shell script)`);
+            }
 
             // Replace move.local with "movedevice" SSH config alias
             // This works for both IPv4 and IPv6 without bracket issues
@@ -1557,21 +1666,89 @@ async function installMain(tarballPath, hostname, flags = []) {
                 } catch (sshTestErr) {
                     const errMsg = (sshTestErr.stderr || sshTestErr.message || '').trim();
                     console.log('[DEBUG] Pre-flight: Git Bash SSH failed:', errMsg);
-                    // Try with explicit key and IP as fallback diagnostic
+
                     const keyPath = getUsablePrivateKeyPath();
-                    const keyFlag = keyPath ? `-i "${keyPath.replace(/\\/g, '/')}"` : '';
+                    const keyBase = keyPath ? path.basename(keyPath) : null;
+                    // Use single quotes (not nested double quotes) around the
+                    // path: nested double-quotes inside `bash -c "..."` get
+                    // re-parsed by cmd.exe and split a spaced path, corrupting
+                    // the command. Single quotes survive both layers. If the
+                    // path itself contains a single quote, fall back to no -i
+                    // and let ssh use its config — matching the shell scripts'
+                    // space/glob guard rationale.
+                    const keyPosix = keyPath ? keyPath.replace(/\\/g, '/') : '';
+                    const keyFlag = (keyPath && !keyPosix.includes("'")) ? `-i '${keyPosix}'` : '';
+
+                    // Probe 1: is the SSH key visible inside Git Bash's OWN home (~)?
+                    // Git Bash's $HOME can differ from the Windows profile the
+                    // installer wrote the key into, and a key that lives only in
+                    // WSL is invisible here. This is the most common root cause.
+                    let keyVisibleInGitBash = true;
+                    if (keyBase) {
+                        try {
+                            const probe = await execWithRetry(`"${bashPath}" -c "test -f ~/.ssh/${keyBase} && echo YES || echo NO"`, { timeout: 8000, maxRetries: 1 });
+                            keyVisibleInGitBash = /YES/.test((probe && probe.stdout) || '');
+                            console.log('[DEBUG] Pre-flight: key visible in Git Bash home?', keyVisibleInGitBash);
+                        } catch (probeErr) {
+                            console.log('[DEBUG] Pre-flight: key-visibility probe failed:', probeErr.message);
+                        }
+                    }
+
+                    // Probe 2: can Git Bash reach the device by IP with an explicit key?
+                    let directWorks = false;
+                    let directErrMsg = '';
                     try {
-                        await execWithRetry(`"${bashPath}" -c "ssh ${keyFlag} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 ableton@${hostIp} echo ok"`, { timeout: 15000 });
-                        console.log('[DEBUG] Pre-flight: direct IP SSH works, SSH config alias may be broken - rebuilding...');
-                        // SSH config alias is broken but direct connection works - rebuild config
-                        await setupSshConfig(hostname);
+                        await execWithRetry(`"${bashPath}" -c "ssh ${keyFlag} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 ableton@${hostIp} echo ok"`, { timeout: 15000, maxRetries: 1 });
+                        directWorks = true;
                     } catch (directErr) {
+                        directErrMsg = (directErr.stderr || directErr.message || '').trim();
+                    }
+
+                    if (directWorks) {
+                        // Connectivity is fine; the movedevice alias/config was stale. Rebuild and continue.
+                        // We DON'T re-probe `ssh movedevice` after the rebuild: probe 2 already
+                        // proved auth + connectivity work, and the rebuild only changes the alias
+                        // mapping (HostName/IdentityFile). If install.sh later fails on `movedevice`
+                        // resolution, it surfaces normally as an install.sh exit-code error.
+                        console.log('[DEBUG] Pre-flight: direct IP SSH works, rebuilding SSH config alias...');
+                        await setupSshConfig(hostname);
+                    } else {
+                        // Turn the probe results into a specific, actionable message.
+                        // The phrasing here is matched by parseError() in the UI to
+                        // pick a tailored error screen.
+                        const combined = (errMsg + ' ' + directErrMsg).toLowerCase();
+                        let detail;
+                        if (!keyVisibleInGitBash) {
+                            detail =
+                                `Your SSH key was not found in Git Bash's home folder` +
+                                (keyBase ? ` (~/.ssh/${keyBase})` : '') + `.\n\n` +
+                                `Git Bash uses its own home folder, which can differ from your Windows ` +
+                                `profile. The installer created the key under Windows, but Git Bash can't ` +
+                                `see it there (this also happens when the key only exists in WSL).`;
+                        } else if (combined.includes('could not resolve') || combined.includes('name or service not known') || combined.includes('nodename nor servname')) {
+                            detail =
+                                `The device hostname is not resolvable from Git Bash.\n\n` +
+                                `Use your Move's IP address (${hostIp}) directly instead of move.local.`;
+                        } else if (combined.includes('permission denied')) {
+                            detail =
+                                `Git Bash connected to the Move but was refused (Permission denied / publickey).\n\n` +
+                                `Git Bash's SSH isn't offering a key the Move accepts. Make sure ` +
+                                (keyBase ? `~/.ssh/${keyBase}` : `~/.ssh/move_key`) +
+                                ` exists in your Git Bash home and its public key is added on the Move.`;
+                        } else if (combined.includes('timed out') || combined.includes('no route') || combined.includes('unreachable')) {
+                            // Phrase MUST contain "git bash's" so parseError routes to the
+                            // Git-Bash-specific screen, not the generic "Connection Failed" one.
+                            detail =
+                                `Git Bash's SSH could not reach the Move on the network (connection timed out).\n\n` +
+                                `Check that the Move is powered on and on the same network.`;
+                        } else {
+                            detail =
+                                `Git Bash's SSH could not connect to the device.\n\n` +
+                                `Error: ${errMsg || directErrMsg || 'unknown'}`;
+                        }
                         throw new Error(
-                            `SSH connection from Git Bash failed.\n\n` +
-                            `The installer verified SSH works, but Git Bash's SSH cannot connect to the device.\n` +
-                            `This can happen if Git Bash uses a different SSH configuration.\n\n` +
-                            `Error: ${errMsg}\n\n` +
-                            `Try: Open Git Bash and run: ssh ableton@${hostIp}`
+                            `${detail}\n\n` +
+                            `To debug, open Git Bash and run:  ssh ableton@${hostIp}`
                         );
                     }
                 }
@@ -2692,4 +2869,7 @@ module.exports = {
     wifiRemoveService,
     wifiEnableRadio,
     findGitBash,
+    detectWsl,
+    isKeyInWsl,
+    syncKeyToWsl,
 };

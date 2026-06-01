@@ -96,6 +96,53 @@ ipcMain.handle('check_git_bash_available', async () => {
     }
 });
 
+// After a Windows install, offer to copy the SSH key into WSL so users who run
+// scripts from WSL don't hit "Permission denied (publickey)". No-op off Windows
+// or when WSL isn't installed / the key is already present.
+ipcMain.handle('offer_wsl_key_sync', async () => {
+    if (process.platform !== 'win32') return { offered: false };
+    try {
+        const wsl = await backend.detectWsl();
+        if (!wsl.present || !wsl.distros.length) return { offered: false };
+        const distro = wsl.distros[0];
+        if (await backend.isKeyInWsl(distro)) return { offered: false, alreadySynced: true };
+
+        const { response } = await dialog.showMessageBox(mainWindow, {
+            type: 'question',
+            buttons: ['Copy key to WSL', 'Not now'],
+            defaultId: 0,
+            cancelId: 1,
+            title: 'Copy SSH key to WSL?',
+            message: `WSL (${distro}) is installed on this PC.`,
+            detail: `Copy your Move SSH key into WSL so you can run Schwung scripts there ` +
+                `(like install.sh / uninstall.sh) without "Permission denied" errors.\n\n` +
+                `The key will be copied into ${distro} at ~/.ssh/ and locked down (chmod 600).`
+        });
+        if (response !== 0) return { offered: true, copied: false };
+
+        const result = await backend.syncKeyToWsl(distro);
+        if (result.success) {
+            await dialog.showMessageBox(mainWindow, {
+                type: 'info', buttons: ['OK'], title: 'Key copied to WSL',
+                message: `Copied to ${distro}:~/.ssh/${result.keyName}`,
+                detail: `You can now run Schwung scripts from WSL.`
+            });
+        } else {
+            await dialog.showMessageBox(mainWindow, {
+                type: 'warning', buttons: ['OK'], title: 'Could not copy key',
+                message: 'The key could not be copied to WSL automatically.',
+                detail: `${result.error}\n\nTo copy it manually, open WSL and run:\n` +
+                    `  cp /mnt/c/Users/<you>/.ssh/${result.keyName} ~/.ssh/${result.keyName}\n` +
+                    `  chmod 600 ~/.ssh/${result.keyName}`
+            });
+        }
+        return { offered: true, copied: !!result.success };
+    } catch (err) {
+        console.error('[DEBUG] offer_wsl_key_sync error:', err.message);
+        return { offered: false, error: err.message };
+    }
+});
+
 ipcMain.handle('find_existing_ssh_key', async () => {
     return backend.findExistingSshKey();
 });
