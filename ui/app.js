@@ -143,6 +143,19 @@ async function startDeviceDiscovery() {
         const sshResult = await window.installer.invoke('try_ssh_fallback', { hostname: state.hostname });
         if (sshResult && sshResult.sshAvailable) {
             console.log('[DEBUG] SSH fallback succeeded, IP:', sshResult.ip);
+            if (!sshResult.ip) {
+                // SSH works but we couldn't resolve a numeric IP. installMain
+                // requires one, so enabling "Repair via SSH" here would let the
+                // user wait through a ~70MB download before failing. Tell them
+                // to enter the IP manually instead.
+                statusDiv.innerHTML =
+                    `<p style="color: orange;">&#9888; Web interface on ${state.hostname} is not responding, but SSH is available.</p>` +
+                    `<p>To repair, please enter your Move's IP address manually below.</p>` +
+                    `<button id="btn-retry-discovery" style="margin: 0.5rem 0.5rem;">Retry</button>`;
+                document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
+                document.querySelector('.manual-entry').style.display = 'block';
+                return;
+            }
             statusDiv.innerHTML =
                 `<p style="color: orange;">&#9888; Web interface on ${state.hostname} is not responding, but SSH is available.</p>` +
                 `<p>This usually means Schwung needs to be repaired. The installer can fix this over SSH.</p>` +
@@ -322,8 +335,20 @@ async function selectDevice(hostname) {
             try {
                 const sshResult = await window.installer.invoke('try_ssh_fallback', { hostname });
                 if (sshResult && sshResult.sshAvailable) {
-                    console.log('[DEBUG] selectDevice: SSH fallback succeeded');
+                    console.log('[DEBUG] selectDevice: SSH fallback succeeded, IP:', sshResult.ip);
                     const errorDetail = (result && result.error) ? ` (${result.error})` : '';
+                    if (!sshResult.ip) {
+                        // SSH works but no numeric IP — installMain requires one.
+                        // Tell the user to enter the IP manually instead of letting
+                        // them wait through a 70MB download that will then fail.
+                        statusDiv.innerHTML =
+                            `<p style="color: orange;">&#9888; Web interface not responding${errorDetail}, but SSH is available.</p>` +
+                            `<p>To repair, please enter your Move's IP address manually below.</p>` +
+                            `<button id="btn-retry-discovery" style="margin: 0.5rem 0.5rem;">Retry</button>`;
+                        document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
+                        document.querySelector('.manual-entry').style.display = 'block';
+                        return;
+                    }
                     statusDiv.innerHTML =
                         `<p style="color: orange;">&#9888; Web interface not responding${errorDetail}, but SSH is available.</p>` +
                         `<p>This usually means Schwung needs to be repaired. The installer can fix this over SSH.</p>` +
@@ -427,18 +452,7 @@ async function submitAuthCode() {
         console.log('Auth successful, cookie saved');
 
         // On Windows, check for Git Bash before proceeding
-        if (window.installer.platform === 'win32') {
-            const gitBashCheck = await window.installer.invoke('check_git_bash_available');
-            if (!gitBashCheck.available) {
-                showError(
-                    'Git Bash is required for installation on Windows.\n\n' +
-                    'Please install Git for Windows from:\n' +
-                    'https://git-scm.com/download/win\n\n' +
-                    'Then restart the installer.'
-                );
-                return;
-            }
-        }
+        if (!(await ensureGitBash())) return;
 
         // Check for SSH key and show confirmation screen
         showSshKeyScreen(baseUrl);
@@ -796,8 +810,39 @@ async function checkIfInstalled() {
     }
 }
 
+// On Windows, after a successful install, offer to copy the SSH key into WSL.
+// No-op off Windows / when WSL isn't installed / key already present.
+async function maybeOfferWslSync() {
+    if (window.installer.platform !== 'win32') return;
+    try {
+        await window.installer.invoke('offer_wsl_key_sync');
+    } catch (e) {
+        /* non-critical convenience step */
+    }
+}
+
+// On Windows, confirm Git Bash is present before any install path runs install.sh.
+// Returns true if good to proceed; otherwise shows a clear error and returns false.
+async function ensureGitBash() {
+    if (window.installer.platform !== 'win32') return true;
+    let available = false;
+    try {
+        const check = await window.installer.invoke('check_git_bash_available');
+        available = !!(check && check.available);
+    } catch (e) {
+        available = false;
+    }
+    if (!available) {
+        // Routed through parseError's "git bash" case for a friendly screen + link.
+        showError('Git Bash is required for installation on Windows.');
+        return false;
+    }
+    return true;
+}
+
 // SSH Repair
 async function startSshRepair() {
+    if (!(await ensureGitBash())) return;
     showScreen('installing');
     try {
         initializeChecklist([]);
@@ -831,6 +876,7 @@ async function startSshRepair() {
         updateChecklistItem('core', 'completed');
 
         updateInstallProgress('Repair complete!', 100);
+        await maybeOfferWslSync();
         setTimeout(() => {
             populateSuccessScreen({ isRepair: true });
             showScreen('success');
@@ -896,6 +942,7 @@ function updateChecklistItem(itemId, status) {
 }
 
 async function startInstallation() {
+    if (!(await ensureGitBash())) return;
     showScreen('installing');
     try {
         // Core-only checklist
@@ -926,6 +973,7 @@ async function startInstallation() {
         updateChecklistItem('core', 'completed');
 
         updateInstallProgress('Installation complete!', 100);
+        await maybeOfferWslSync();
         setTimeout(function() {
             populateSuccessScreen();
             showScreen('success');
@@ -1025,8 +1073,39 @@ function updateInstallProgress(message, percent) {
 function parseError(error) {
     const errorStr = error.toString().toLowerCase();
 
+    // Git Bash missing (Windows) — check first; the message is unambiguous and
+    // we don't want it falling through to a generic "Installation Error". Match
+    // the specific phrase so SSH-env diagnostics (which also mention Git Bash)
+    // don't get mis-routed here.
+    if (errorStr.includes('git bash is required')) {
+        return {
+            title: 'Git Bash Is Required',
+            message: 'The installer uses Git Bash (part of Git for Windows) to set up your Move, but it isn\'t installed on this PC.',
+            suggestions: [
+                'Install Git for Windows from <a href="https://git-scm.com/download/win" target="_blank" rel="noreferrer">git-scm.com/download/win</a>',
+                'Keep the default options during setup — no special components are needed',
+                'After it installs, restart this installer and try again'
+            ]
+        };
+    }
+
+    // SSH environment mismatch surfaced by the Windows pre-flight (Git Bash has a
+    // separate SSH config/key environment from the rest of Windows).
+    if (errorStr.includes('git bash\'s ssh') || errorStr.includes('ssh key was not found') || errorStr.includes('not resolvable from git bash')) {
+        return {
+            title: 'Git Bash Can\'t Reach Your Move',
+            message: error.toString(),
+            suggestions: [
+                'Open Git Bash and run:  ssh ableton@&lt;your Move IP&gt;  to see the underlying error',
+                'If it says "Permission denied", your SSH key isn\'t visible to Git Bash — make sure ~/.ssh/move_key exists in your Windows home folder',
+                'If it says "Could not resolve hostname", use your Move\'s IP address instead of move.local',
+                'Copy diagnostics and report the issue on GitHub if it persists'
+            ]
+        };
+    }
+
     // Network/connectivity errors
-    if (errorStr.includes('timeout') || errorStr.includes('econnrefused') || errorStr.includes('ehostunreach')) {
+    if (errorStr.includes('timeout') || errorStr.includes('timed out') || errorStr.includes('no route') || errorStr.includes('unreachable') || errorStr.includes('econnrefused') || errorStr.includes('ehostunreach')) {
         return {
             title: 'Connection Failed',
             message: 'Could not connect to your Move device.',
@@ -1040,15 +1119,19 @@ function parseError(error) {
     }
 
     if (errorStr.includes('dns') || errorStr.includes('getaddrinfo') || errorStr.includes('.local')) {
+        const suggestions = [
+            'Try entering your Move\'s IP address manually',
+            'Check that your Move is connected to WiFi',
+            'Make sure you\'re on the same WiFi network as your Move',
+        ];
+        // Only show the Bonjour hint on Windows — Mac and Linux have native mDNS.
+        if (window.installer && window.installer.platform === 'win32') {
+            suggestions.push('On Windows, install Bonjour service (comes with iTunes/iCloud)');
+        }
         return {
             title: 'Device Not Found',
             message: 'Could not find your Move on the network.',
-            suggestions: [
-                'Try entering your Move\'s IP address manually',
-                'Check that your Move is connected to WiFi',
-                'Make sure you\'re on the same WiFi network as your Move',
-                'On Windows, install Bonjour service (comes with iTunes/iCloud)'
-            ]
+            suggestions
         };
     }
 
@@ -1724,6 +1807,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // (i.e. user is on a release older than 0.9.10 — lightweight Re-enable
     // can't help because there's no heal mechanism in /data to apply).
     async function runFullRepair() {
+        if (!(await ensureGitBash())) return;
         showScreen('installing');
         try {
             const checklist = document.getElementById('install-checklist');
@@ -1762,6 +1846,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
 
             updateInstallProgress('Repair complete!', 100);
+            await maybeOfferWslSync();
             setTimeout(() => {
                 populateSuccessScreen({ isRepair: true });
                 showScreen('success');
@@ -1777,6 +1862,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!confirm('Repair installation? This will reinstall Schwung core.')) return;
         await runFullRepair();
     };
+
+    // Windows-only: expose the WSL key sync as a link so users who declined
+    // the post-install prompt (or who installed WSL after Schwung) can still
+    // trigger it without redoing the whole install.
+    if (window.installer.platform === 'win32') {
+        document.querySelectorAll('.win-only').forEach(el => { el.style.display = ''; });
+        document.getElementById('link-wsl-sync').onclick = async (e) => {
+            e.preventDefault();
+            try {
+                const result = await window.installer.invoke('offer_wsl_key_sync');
+                // The handler itself shows native dialogs on success/failure/no-WSL.
+                // If it returned `{offered: false}` with no error, WSL isn't present
+                // or the key is already there — give the user a quick toast-equivalent.
+                if (result && !result.offered && !result.error) {
+                    if (result.alreadySynced) {
+                        alert('SSH key is already in WSL.');
+                    } else {
+                        alert('No WSL distros detected on this machine.');
+                    }
+                }
+            } catch (err) {
+                alert('Could not sync key to WSL: ' + err);
+            }
+        };
+    }
 
     document.getElementById('link-uninstall').onclick = async (e) => {
         e.preventDefault();
