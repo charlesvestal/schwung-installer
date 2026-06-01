@@ -1461,33 +1461,90 @@ async function findGitBash() {
     // running install.sh through it reproduces the "key not found / host not
     // resolvable" failures users have reported. So we verify any PATH-resolved
     // bash is actually MSYS/MINGW (Git Bash) and never WSL.
-    // Dedupe: PROGRAMFILES usually equals "C:\\Program Files", so without Set()
-    // we'd probe the same file twice and double worst-case latency on machines
-    // without Git Bash (each missing probe is ~2s).
-    const knownPaths = [...new Set([
-        'C:\\Program Files\\Git\\bin\\bash.exe',
-        'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-        path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-        path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
-    ])];
-
-    const { exec } = require('child_process');
+    const { execFile } = require('child_process');
     const { promisify } = require('util');
-    const execAsync = promisify(exec);
+    const execFileAsync = promisify(execFile);
 
-    for (const bashPath of knownPaths) {
+    // A file probe is just an existence check — install.sh runs bash.exe later,
+    // so we don't need to spawn it here just to confirm the path resolves. This
+    // is instant and avoids the old ~2s-per-missing-path timeout penalty on
+    // machines without Git Bash.
+    const probe = (bashPath) => {
         try {
-            await execAsync(`"${bashPath}" --version`, { timeout: 2000 });
-            console.log('[DEBUG] Found Git Bash at:', bashPath);
-            return bashPath;
+            if (bashPath && fs.existsSync(bashPath)) {
+                console.log('[DEBUG] Found Git Bash at:', bashPath);
+                return bashPath;
+            }
         } catch (err) {
-            // Try next path
+            // unreadable path — treat as not found
+        }
+        return null;
+    };
+
+    // 1) Registry is authoritative regardless of WHERE Git was installed. Git
+    //    for Windows records its root under GitForWindows\InstallPath: HKCU for
+    //    a per-user ("install for me only") install, HKLM for a system-wide one.
+    //    We query both, and both registry views (64- and 32-bit), so an x86 Git
+    //    on x64 Windows is still found. This is what fixes the most common
+    //    "won't recognize Git Bash" report: per-user installs that live under
+    //    %LOCALAPPDATA% and never touch Program Files or PATH.
+    const regRoots = [];
+    for (const hive of ['HKCU', 'HKLM']) {
+        for (const view of ['/reg:64', '/reg:32']) {
+            regRoots.push(['query', `${hive}\\SOFTWARE\\GitForWindows`, '/v', 'InstallPath', view]);
+        }
+    }
+    for (const args of regRoots) {
+        try {
+            const { stdout } = await execFileAsync('reg', args, { timeout: 2000 });
+            const m = /InstallPath\s+REG_SZ\s+(.+?)\s*$/im.exec(stdout || '');
+            if (m && m[1]) {
+                const hit = probe(path.join(m[1].trim(), 'bin', 'bash.exe'));
+                if (hit) return hit;
+            }
+        } catch (err) {
+            // key absent in this hive/view — try the next
         }
     }
 
-    // Last resort: a 'bash' on PATH — but only if it's genuinely Git Bash.
+    // 2) Well-known filesystem locations, covering both system-wide (Program
+    //    Files) and per-user (%LOCALAPPDATA%\Programs\Git) installs. Dedupe:
+    //    PROGRAMFILES usually equals "C:\\Program Files", so without Set() we'd
+    //    probe the same file twice.
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    const knownPaths = [...new Set([
+        path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
+        path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+        'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+        path.join(localAppData, 'Programs', 'Git', 'bin', 'bash.exe'),
+    ])];
+    for (const bashPath of knownPaths) {
+        const hit = probe(bashPath);
+        if (hit) return hit;
+    }
+
+    // 3) Derive the install root from git.exe on PATH. Even when bash itself
+    //    isn't on PATH, git frequently is; "<root>\\cmd\\git.exe" sits beside
+    //    "<root>\\bin\\bash.exe".
     try {
-        const { stdout } = await execAsync(`bash -c "uname -s"`, { timeout: 2000 });
+        const { stdout } = await execFileAsync('where', ['git'], { timeout: 2000 });
+        for (const line of (stdout || '').split(/\r?\n/)) {
+            const gitExe = line.trim();
+            if (!/git\.exe$/i.test(gitExe)) continue;
+            // <root>\cmd\git.exe  or  <root>\bin\git.exe  ->  <root>
+            const root = path.dirname(path.dirname(gitExe));
+            const hit = probe(path.join(root, 'bin', 'bash.exe'));
+            if (hit) return hit;
+        }
+    } catch (err) {
+        // git not on PATH
+    }
+
+    // 4) Last resort: a bare 'bash' on PATH — but only if it's genuinely Git
+    //    Bash and not WSL (see header comment).
+    try {
+        const { stdout } = await execFileAsync('bash', ['-c', 'uname -s'], { timeout: 2000 });
         const kernel = (stdout || '').trim();
         if (/^(MINGW|MSYS)/i.test(kernel)) {
             console.log('[DEBUG] Found Git Bash on PATH (uname:', kernel + ')');
