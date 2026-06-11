@@ -611,6 +611,7 @@ function getUsablePrivateKeyPath() {
     const candidates = [
         { name: 'move_key', path: path.join(sshDir, 'move_key'), regenerateOnEncrypted: true },
         { name: 'id_ed25519', path: path.join(sshDir, 'id_ed25519'), regenerateOnEncrypted: false },
+        { name: 'id_ecdsa', path: path.join(sshDir, 'id_ecdsa'), regenerateOnEncrypted: false },
         { name: 'id_rsa', path: path.join(sshDir, 'id_rsa'), regenerateOnEncrypted: false },
     ];
 
@@ -630,11 +631,12 @@ function getUsablePrivateKeyPath() {
 function findExistingSshKey() {
     const sshDir = path.join(os.homedir(), '.ssh');
 
-    // Check keys in preference order: move_key > id_ed25519 > id_rsa
+    // Check keys in preference order: move_key > id_ed25519 > id_ecdsa > id_rsa
     // Skip keys whose private key is passphrase-protected
     const candidates = [
         { name: 'move_key', pubPath: path.join(sshDir, 'move_key.pub'), privPath: path.join(sshDir, 'move_key'), deleteOnEncrypted: true },
         { name: 'id_ed25519', pubPath: path.join(sshDir, 'id_ed25519.pub'), privPath: path.join(sshDir, 'id_ed25519'), deleteOnEncrypted: false },
+        { name: 'id_ecdsa', pubPath: path.join(sshDir, 'id_ecdsa.pub'), privPath: path.join(sshDir, 'id_ecdsa'), deleteOnEncrypted: false },
         { name: 'id_rsa', pubPath: path.join(sshDir, 'id_rsa.pub'), privPath: path.join(sshDir, 'id_rsa'), deleteOnEncrypted: false },
     ];
 
@@ -803,7 +805,7 @@ async function clearStaleHostKeys(hostname) {
 
 async function testSsh(hostname) {
     try {
-        // Use move_key if it exists, otherwise id_rsa (skip encrypted keys)
+        // Pick the first usable key: move_key > id_ed25519 > id_ecdsa > id_rsa (skip encrypted keys)
         const keyPath = getUsablePrivateKeyPath();
 
         console.log('[DEBUG] testSsh: Usable key path:', keyPath);
@@ -1268,7 +1270,7 @@ async function sshExec(hostname, command, { username = 'ableton' } = {}) {
     // Prefer cached IP, but allow fallback to hostname for SSH (native ssh can resolve .local)
     const hostIp = cachedDeviceIp || hostname;
 
-    // Use move_key if it exists, otherwise id_rsa (skip encrypted keys)
+    // Pick the first usable key: move_key > id_ed25519 > id_ecdsa > id_rsa (skip encrypted keys)
     const keyPath = getUsablePrivateKeyPath();
     if (!keyPath) {
         throw new Error('No usable SSH key found (keys may be passphrase-protected)');

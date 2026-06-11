@@ -472,11 +472,11 @@ async function showSshKeyScreen(baseUrl) {
 
         if (pubkeyPath) {
             console.log('[DEBUG] Found SSH key:', pubkeyPath);
-            messageEl.textContent = 'Secure connection key found. Ready to add it to your Move device.';
-            explanationEl.style.display = 'none';
+            messageEl.textContent = 'An existing SSH key was found. It will be installed on your Move so the installer can connect to it securely.';
+            explanationEl.style.display = 'block';
         } else {
             console.log('[DEBUG] No SSH key found');
-            messageEl.textContent = 'No secure connection key found. A new key will be generated and added to your Move device.';
+            messageEl.textContent = 'A new SSH key will be generated and installed on your Move so the installer can connect to it securely.';
             explanationEl.style.display = 'block';
         }
 
@@ -1576,6 +1576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('warning-box').innerHTML = `
                 <p><strong>Welcome back!</strong> This installer will connect to your Ableton Move to manage your installation.</p>
                 <p><strong>Note:</strong> Ensure your Move is connected to the same WiFi network as this computer.</p>
+                <p><strong>If you experience any issues, do not contact Ableton Support.</strong> Instead, join the <a href="https://discord.gg/GHWaZCC9bQ" target="_blank">Schwung Discord</a> for help.</p>
             `;
         }
     } catch (e) { /* ignore */ }
