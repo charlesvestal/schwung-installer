@@ -585,6 +585,15 @@ button.secondary:hover {
     color: #721c24;
 }
 
+.warning-box a {
+    color: #0a58ca;
+    font-weight: 600;
+}
+
+.info-box a {
+    color: #4d9fff;
+}
+
 /* Installation Options */
 .install-options {
     margin-bottom: 2rem;
