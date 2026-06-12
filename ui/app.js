@@ -472,11 +472,11 @@ async function showSshKeyScreen(baseUrl) {
 
         if (pubkeyPath) {
             console.log('[DEBUG] Found SSH key:', pubkeyPath);
-            messageEl.textContent = 'An existing SSH key was found. It will be installed on your Move so the installer can connect to it securely.';
+            messageEl.textContent = 'An existing SSH key was found. It will be installed on your Move, giving the installer root access to make the changes Schwung requires.';
             explanationEl.style.display = 'block';
         } else {
             console.log('[DEBUG] No SSH key found');
-            messageEl.textContent = 'A new SSH key will be generated and installed on your Move so the installer can connect to it securely.';
+            messageEl.textContent = 'A new SSH key will be generated and installed on your Move, giving the installer root access to make the changes Schwung requires.';
             explanationEl.style.display = 'block';
         }
 
