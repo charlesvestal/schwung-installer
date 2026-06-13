@@ -1913,6 +1913,21 @@ async function installMain(tarballPath, hostname, flags = []) {
                         // Still treat as success - installation is complete, user can reboot
                     }
                     // Don't throw - installation itself succeeded
+                } else if (execError.killed || execError.signal === 'SIGTERM' || execError.code === null) {
+                    // exec killed the script via SIGTERM when its 5-minute timeout
+                    // fired (execError.code is null on signal death). This almost
+                    // always means an SSH/scp call stalled mid-session — typically a
+                    // stale network path left behind when the Move was plugged into
+                    // this computer over USB. Give an actionable message instead of
+                    // the bare "exit code null".
+                    throw new Error(
+                        `Installation timed out — the connection to your Move stalled.\n\n` +
+                        `If your Move is plugged into this computer with a USB cable, unplug it ` +
+                        `and use a wall charger instead, then try again. Also make sure your Move ` +
+                        `and this computer are on the same Wi-Fi network.\n\n` +
+                        `Output:\n${stdout}\n\n` +
+                        `Errors:\n${stderr}`
+                    );
                 } else {
                     throw new Error(
                         `install.sh failed with exit code ${execError.code}\n\n` +
