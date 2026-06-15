@@ -1276,14 +1276,27 @@ async function sshExec(hostname, command, { username = 'ableton' } = {}) {
         throw new Error('No usable SSH key found (keys may be passphrase-protected)');
     }
 
-    // Try native SSH first
+    // Try native SSH first.
+    //
+    // Use execFile (NOT exec) so `command` is passed as a single argv element with
+    // NO intervening local /bin/sh. ssh then forwards it verbatim to the device's
+    // shell -- identical semantics to the ssh2 fallback below (conn.exec(command)).
+    // This is what lets every command string use plain `$`: there is no local shell
+    // to expand $(...) or strip backslashes, so commands must NOT pre-escape `$`.
+    // (The old `exec(\`ssh ... "${command}"\`)` form ran through a local shell, which
+    //  required `\$` escaping that then broke when the ssh2 fallback path was taken.)
     try {
-        const { exec } = require('child_process');
+        const { execFile } = require('child_process');
         const { promisify } = require('util');
-        const execAsync = promisify(exec);
+        const execFileAsync = promisify(execFile);
 
-        const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o BatchMode=yes ${username}@${hostIp} "${command.replace(/"/g, '\\"')}"`;
-        const { stdout } = await execAsync(sshCmd, { timeout: 30000 });
+        const { stdout } = await execFileAsync('ssh', [
+            '-i', keyPath,
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'BatchMode=yes',
+            `${username}@${hostIp}`,
+            command,
+        ], { timeout: 30000 });
         return stdout;
     } catch (nativeErr) {
         // Fallback to ssh2 library
@@ -2048,10 +2061,10 @@ async function checkShimActive(hostname) {
         // This is the strongest signal and works for legacy/pre-backup installs too.
         let runtimeState = 'unknown';
         try {
-            const runtimeProbe = "pid=\\$(pidof MoveOriginal 2>/dev/null | awk '{print \\$1}'); " +
-                "if [ -z \"\\$pid\" ]; then pid=\\$(pidof Move 2>/dev/null | awk '{print \\$1}'); fi; " +
-                "if [ -z \"\\$pid\" ]; then echo \"no_process\"; " +
-                "elif grep -q \"schwung-shim.so\\|move-anything-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
+            const runtimeProbe = "pid=$(pidof MoveOriginal 2>/dev/null | awk '{print $1}'); " +
+                "if [ -z \"$pid\" ]; then pid=$(pidof Move 2>/dev/null | awk '{print $1}'); fi; " +
+                "if [ -z \"$pid\" ]; then echo \"no_process\"; " +
+                "elif grep -q \"schwung-shim.so\\|move-anything-shim.so\" /proc/$pid/maps 2>/dev/null; then echo \"active\"; " +
                 "else echo \"inactive\"; fi";
             runtimeState = (await sshExecWithRetry(hostIp, runtimeProbe, { username: 'root' })).trim();
             console.log('[DEBUG] Shim runtime probe:', runtimeState);
@@ -2217,7 +2230,7 @@ async function reenableMoveEverything(hostname) {
         // TTS library symlinks if present
         const hasLib = await sshExecWithRetry(hostIp, 'test -d /data/UserData/schwung/lib && echo "yes" || echo "no"');
         if (hasLib.trim() === 'yes') {
-            await sshExecWithRetry(hostIp, 'cd /data/UserData/schwung/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/schwung/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
+            await sshExecWithRetry(hostIp, 'cd /data/UserData/schwung/lib && for lib in *.so.*; do [ -e "$lib" ] || continue; rm -f "/usr/lib/$lib" && ln -s "/data/UserData/schwung/lib/$lib" "/usr/lib/$lib"; done', { username: 'root' });
         }
 
         // Ensure entrypoint is executable
@@ -2257,7 +2270,7 @@ async function reenableMoveEverything(hostname) {
                     if (hasOriginal.trim() !== 'yes') {
                         await sshExecWithRetry(hostIp, `mv ${webSvcPath} ${webSvcPath}Original`, { username: 'root' });
                     }
-                    await sshExecWithRetry(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/schwung/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/schwung-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
+                    await sshExecWithRetry(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/schwung/lib:$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/schwung-web-shim.so\nexec ${webSvcPath}Original "$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
                 }
             } catch (err) {
                 console.log('[DEBUG] Web service wrapper setup failed (non-fatal):', err.message);
@@ -2267,9 +2280,9 @@ async function reenableMoveEverything(hostname) {
         // Stop and restart Move service
         console.log('[DEBUG] Restarting Move service...');
         await sshExecWithRetry(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui schwung link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
         await sshExecWithRetry(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExecWithRetry(hostIp, 'pids=\\$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids || true; fi', { username: 'root' });
+        await sshExecWithRetry(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Restart MoveWebService if wrapped
@@ -2294,7 +2307,7 @@ async function reenableMoveEverything(hostname) {
         for (let i = 0; i < 30; i++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             try {
-                const check = await sshExec(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "schwung-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
+                const check = await sshExec(hostIp, 'pid=$(pidof MoveOriginal 2>/dev/null | awk \'{print $1}\'); test -n "$pid" && grep -q "schwung-shim.so" /proc/$pid/maps && echo "ok" || echo "no"', { username: 'root' });
                 if (check.trim() === 'ok') {
                     shimOk = true;
                     break;
