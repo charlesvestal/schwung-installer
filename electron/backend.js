@@ -2432,8 +2432,13 @@ async function fixPermissions(hostname) {
             { username: 'root' }
         );
 
-        // Ensure executables are executable
-        await sshExecWithRetry(hostIp, 'chmod +x /data/UserData/schwung/schwung /data/UserData/schwung/shim-entrypoint.sh /data/UserData/schwung/start.sh /data/UserData/schwung/stop.sh', { username: 'root' });
+        // Ensure executables are executable. Guard each path with `[ -f ]` so a
+        // missing file never fails the whole step: the Schwung package stopped
+        // shipping start.sh/stop.sh (standalone launchers, shadow-mode-only on
+        // device), which made the old hardcoded chmod exit 1 with
+        // "No such file or directory" and aborted an otherwise-successful
+        // install. The loop also tolerates future package changes to this list.
+        await sshExecWithRetry(hostIp, 'for f in /data/UserData/schwung/schwung /data/UserData/schwung/shim-entrypoint.sh /data/UserData/schwung/restart-move.sh /data/UserData/schwung/launch-standalone.sh /data/UserData/schwung/start.sh /data/UserData/schwung/stop.sh; do if [ -f "$f" ]; then chmod +x "$f"; fi; done', { username: 'root' });
 
         console.log('[DEBUG] Permissions fixed');
         return { success: true };
