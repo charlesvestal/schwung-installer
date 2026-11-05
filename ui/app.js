@@ -80,6 +80,11 @@ function showScreen(screenName) {
 
 // Holds the active discovery countdown so we can cancel it.
 let discoveryConfirmTimer = null;
+// Bumped by every discovery run. A run that is overtaken while awaiting (Start,
+// then Enter or Connect, or Retry) must not show a countdown of its own: two
+// countdowns orphaned one, which then called selectDevice() every second,
+// asking the Move for a new PIN and clearing the code entry each time (#16).
+let discoveryGeneration = 0;
 function cancelDiscoveryConfirm() {
     if (discoveryConfirmTimer) {
         clearInterval(discoveryConfirmTimer);
@@ -91,6 +96,7 @@ function cancelDiscoveryConfirm() {
 async function startDeviceDiscovery() {
     // Cancel any pending confirm countdown from a previous run
     cancelDiscoveryConfirm();
+    const generation = ++discoveryGeneration;
 
     // Reset discovery UI state
     document.querySelector('.manual-entry').style.display = 'none';
@@ -118,6 +124,7 @@ async function startDeviceDiscovery() {
         const baseUrl = `http://${state.hostname}`;
         const result = await window.installer.invoke('validate_device_at', { baseUrl });
         const isValid = result === true || (result && result.valid !== false);
+        if (generation !== discoveryGeneration) return;  // a newer run owns the UI
 
         if (isValid) {
             console.log('[DEBUG]', state.hostname, 'validated successfully');
@@ -135,12 +142,15 @@ async function startDeviceDiscovery() {
         console.error('[DEBUG]', state.hostname, 'validation failed:', error);
     }
 
+    if (generation !== discoveryGeneration) return;
+
     // HTTP failed — try SSH as fallback (device may have broken web server)
     console.log('[DEBUG] HTTP failed, trying SSH fallback...');
     statusDiv.innerHTML = `<div class="spinner"></div><p>Web interface unreachable. Checking SSH connection...</p>`;
 
     try {
         const sshResult = await window.installer.invoke('try_ssh_fallback', { hostname: state.hostname });
+        if (generation !== discoveryGeneration) return;
         if (sshResult && sshResult.sshAvailable) {
             console.log('[DEBUG] SSH fallback succeeded, IP:', sshResult.ip);
             if (!sshResult.ip) {
@@ -172,6 +182,7 @@ async function startDeviceDiscovery() {
     } catch (sshErr) {
         console.log('[DEBUG] SSH fallback error:', sshErr);
     }
+    if (generation !== discoveryGeneration) return;
 
     // Both HTTP and SSH failed — show standard error
     const isMac = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Macintosh');
@@ -191,6 +202,9 @@ async function startDeviceDiscovery() {
 // (important when there are multiple Moves on the network and the resolved
 // one isn't the intended target).
 function showDiscoveryConfirm(hostname, ip) {
+    // Never run two countdowns: overwriting discoveryConfirmTimer orphans the
+    // first one, which can then no longer be cancelled.
+    cancelDiscoveryConfirm();
     const statusDiv = document.getElementById('discovery-status');
     const detail = ip && ip !== hostname ? `${hostname} (${ip})` : hostname;
     let remaining = 5;
@@ -227,7 +241,8 @@ function showDiscoveryConfirm(hostname, ip) {
     const continueBtn = document.getElementById('btn-discovery-continue');
     if (continueBtn) continueBtn.focus();
 
-    discoveryConfirmTimer = setInterval(() => {
+    const timer = setInterval(() => {
+        if (discoveryConfirmTimer !== timer) { clearInterval(timer); return; }
         remaining -= 1;
         if (remaining <= 0) {
             cancelDiscoveryConfirm();
@@ -237,6 +252,7 @@ function showDiscoveryConfirm(hostname, ip) {
         const cd = statusDiv.querySelector('.countdown');
         if (cd) cd.textContent = `Continuing in ${remaining}...`;
     }, 1000);
+    discoveryConfirmTimer = timer;
 }
 
 // Build the manager URL using whatever hostname/IP the user actually picked.
