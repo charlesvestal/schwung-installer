@@ -54,6 +54,94 @@ function electronNetGet(url, timeoutMs = 10000) {
     });
 }
 
+// HTTP to the Move itself. On macOS this MUST go through Electron's net:
+// Node sockets (axios) are not covered by the Local Network permission, so
+// they fail with EHOSTUNREACH even when validation (which already uses
+// Electron net) succeeded a moment earlier. Returns an axios-shaped
+// { status, data, headers } and never throws on non-2xx, like httpClient.
+function deviceRequest(method, url, { body, headers = {}, timeout = 60000 } = {}) {
+    if (!(electronNet && process.platform === 'darwin')) {
+        return httpClient.request({ method, url, data: body, headers, timeout });
+    }
+    return new Promise((resolve, reject) => {
+        const request = electronNet.request({ method, url });
+        for (const [name, value] of Object.entries(headers)) {
+            request.setHeader(name, value);
+        }
+        let body_ = body;
+        if (body_ !== undefined && typeof body_ !== 'string' && !Buffer.isBuffer(body_)) {
+            body_ = JSON.stringify(body_);
+            if (!Object.keys(headers).some(h => h.toLowerCase() === 'content-type')) {
+                request.setHeader('Content-Type', 'application/json');
+            }
+        }
+        const timer = setTimeout(() => {
+            request.abort();
+            reject(new Error(`timeout of ${timeout}ms exceeded`));
+        }, timeout);
+        request.on('response', (response) => {
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => {
+                clearTimeout(timer);
+                const text = Buffer.concat(chunks).toString('utf8');
+                let data = text;
+                try { data = JSON.parse(text); } catch {}
+                resolve({ status: response.statusCode, data, headers: response.headers });
+            });
+            response.on('error', (err) => {
+                clearTimeout(timer);
+                reject(err);
+            });
+        });
+        request.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+        if (body_ !== undefined) request.write(body_);
+        request.end();
+    });
+}
+
+// Describe a failed device request so the user can see WHERE it went and,
+// for the macOS permission case, what to do about it.
+function describeDeviceError(err, url) {
+    const msg = err && err.message ? err.message : String(err);
+    let host = url;
+    try { host = new URL(url).host; } catch {}
+    let hint = '';
+    if (/EHOSTUNREACH|ERR_ADDRESS_UNREACHABLE|ENETUNREACH/.test(msg) && process.platform === 'darwin') {
+        hint = ' — check System Settings > Privacy & Security > Local Network and make sure Schwung Installer is allowed, then relaunch it';
+    }
+    return `${msg} (device at ${host})${hint}`;
+}
+
+// The address a Move answers on over USB-C. Preferred over whatever
+// move.local resolves to: mDNS can return the Move's Wi-Fi address (or a
+// stale cached one) even when the user is connected by cable.
+const USB_C_DEVICE_IP = '172.16.254.1';
+
+async function probeUsbC(timeoutMs = 2000) {
+    const url = `http://${USB_C_DEVICE_IP}/`;
+    try {
+        if (electronNet && process.platform === 'darwin') {
+            await electronNetGet(url, timeoutMs);
+        } else {
+            await httpClient.get(url, { timeout: timeoutMs });
+        }
+        return true;
+    } catch (err) {
+        console.log(`[DEBUG] USB-C probe (${USB_C_DEVICE_IP}) failed: ${err.message}`);
+        return false;
+    }
+}
+
+// The URL device API calls should use: the resolved IP when we have one,
+// so axios/net never re-resolve move.local to a different interface.
+function deviceBaseUrl(baseUrl) {
+    return cachedDeviceIp ? `http://${cachedDeviceIp}` : baseUrl;
+}
+
 // Override console.log to also send to renderer
 const originalLog = console.log;
 console.log = function(...args) {
@@ -130,6 +218,12 @@ async function validateDevice(baseUrl) {
                 // Already an IP, use it directly
                 console.log(`[DEBUG] Using IP address directly: ${hostname}`);
                 cachedDeviceIp = hostname;
+            } else if (hostname.toLowerCase() === 'move.local' && await probeUsbC()) {
+                // Connected by cable: use it, whatever mDNS says move.local is.
+                // (Only for the default name — a user who typed another name
+                // or an IP may mean a different Move.)
+                console.log(`[DEBUG] Move answers over USB-C at ${USB_C_DEVICE_IP}; using it instead of resolving ${hostname}`);
+                cachedDeviceIp = USB_C_DEVICE_IP;
             } else {
                 // Try DNS resolution
                 try {
@@ -418,7 +512,9 @@ async function validateDevice(baseUrl) {
             const errMsg = err.message || 'unknown error';
             console.log(`[DEBUG] HTTP validation failed: ${errMsg} (code: ${errCode})`);
             if (err.cause) console.log(`[DEBUG] HTTP validation cause: ${err.cause.message || err.cause}`);
-            return { valid: false, error: `Connection failed: ${errCode === 'unknown' ? errMsg : errCode}` };
+            let where = validateUrl;
+            try { where = new URL(validateUrl).host; } catch {}
+            return { valid: false, error: `Connection failed: ${errCode === 'unknown' ? errMsg : errCode} (device at ${where})` };
         }
     } catch (err) {
         console.error('Device validation error:', err.message);
@@ -536,8 +632,10 @@ async function clearSavedCookie() {
 }
 
 async function requestChallenge(baseUrl) {
+    const url = `${deviceBaseUrl(baseUrl)}/api/v1/challenge`;
     try {
-        const response = await httpClient.post(`${baseUrl}/api/v1/challenge`, {});
+        console.log('[DEBUG] Requesting challenge:', url);
+        const response = await deviceRequest('POST', url, { body: {} });
 
         if (response.status !== 200) {
             throw new Error(`Challenge request failed: ${response.status}`);
@@ -545,18 +643,17 @@ async function requestChallenge(baseUrl) {
 
         return true;
     } catch (err) {
-        throw new Error(`Failed to request challenge: ${err.message}`);
+        throw new Error(`Failed to request challenge: ${describeDeviceError(err, url)}`);
     }
 }
 
 async function submitAuthCode(baseUrl, code) {
+    const url = `${deviceBaseUrl(baseUrl)}/api/v1/challenge-response`;
     try {
         console.log('[DEBUG] Submitting auth code:', code);
-        console.log('[DEBUG] Request URL:', `${baseUrl}/api/v1/challenge-response`);
+        console.log('[DEBUG] Request URL:', url);
 
-        const response = await httpClient.post(`${baseUrl}/api/v1/challenge-response`, {
-            secret: code
-        });
+        const response = await deviceRequest('POST', url, { body: { secret: code } });
 
         console.log('[DEBUG] Response status:', response.status);
         console.log('[DEBUG] Response data:', response.data);
@@ -565,8 +662,10 @@ async function submitAuthCode(baseUrl, code) {
             throw new Error(`Auth failed: ${response.status} - ${JSON.stringify(response.data)}`);
         }
 
-        // Extract Set-Cookie header
-        const setCookie = response.headers['set-cookie'];
+        // Extract Set-Cookie header (array from axios and Electron net alike,
+        // but tolerate a bare string)
+        let setCookie = response.headers['set-cookie'];
+        if (typeof setCookie === 'string') setCookie = [setCookie];
         if (setCookie && setCookie.length > 0) {
             savedCookie = setCookie[0].split(';')[0];
             await writeFile(cookieStore, savedCookie);
@@ -575,7 +674,7 @@ async function submitAuthCode(baseUrl, code) {
 
         throw new Error('No cookie returned from auth');
     } catch (err) {
-        throw new Error(`Failed to submit auth code: ${err.message}`);
+        throw new Error(`Failed to submit auth code: ${describeDeviceError(err, url)}`);
     }
 }
 
@@ -743,7 +842,7 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
         }
 
         // Use cached IP if available, otherwise fall back to baseUrl
-        const targetUrl = cachedDeviceIp ? `http://${cachedDeviceIp}` : baseUrl;
+        const targetUrl = deviceBaseUrl(baseUrl);
         console.log('[DEBUG] Submitting SSH key to:', targetUrl);
         console.log('[DEBUG] Cookie:', savedCookie);
 
@@ -755,7 +854,8 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
         console.log('[DEBUG] Pubkey content:', keyWithoutComment);
 
         // Send SSH key as raw POST body (not form field)
-        const response = await httpClient.post(`${targetUrl}/api/v1/ssh`, keyWithoutComment, {
+        const response = await deviceRequest('POST', `${targetUrl}/api/v1/ssh`, {
+            body: keyWithoutComment,
             headers: {
                 'Cookie': savedCookie,
                 'Content-Type': 'application/x-www-form-urlencoded'
@@ -786,7 +886,7 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
 
         return true;
     } catch (err) {
-        throw new Error(`Failed to submit SSH key: ${err.message}`);
+        throw new Error(`Failed to submit SSH key: ${describeDeviceError(err, deviceBaseUrl(baseUrl))}`);
     }
 }
 
@@ -2556,7 +2656,8 @@ async function testSshFormats(cookie) {
         // Test API submission
         try {
             const pubkeyClean = pubkey.trim().split(' ').slice(0, 2).join(' ');
-            const response = await httpClient.post(`${deviceUrl}/api/v1/ssh`, pubkeyClean, {
+            const response = await deviceRequest('POST', `${deviceUrl}/api/v1/ssh`, {
+                body: pubkeyClean,
                 headers: { 'Cookie': cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
                 timeout: 5000
             });
@@ -2633,7 +2734,8 @@ async function testSshFormats(cookie) {
         // Test API submission
         try {
             const pubkeyClean = pubkey.trim().split(' ').slice(0, 2).join(' ');
-            const response = await httpClient.post(`${deviceUrl}/api/v1/ssh`, pubkeyClean, {
+            const response = await deviceRequest('POST', `${deviceUrl}/api/v1/ssh`, {
+                body: pubkeyClean,
                 headers: { 'Cookie': cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
                 timeout: 5000
             });
@@ -2688,7 +2790,8 @@ async function testSshFormats(cookie) {
         // Test API submission
         try {
             const pubkeyClean = pubkey.trim().split(' ').slice(0, 2).join(' ');
-            const response = await httpClient.post(`${deviceUrl}/api/v1/ssh`, pubkeyClean, {
+            const response = await deviceRequest('POST', `${deviceUrl}/api/v1/ssh`, {
+                body: pubkeyClean,
                 headers: { 'Cookie': cookie, 'Content-Type': 'application/x-www-form-urlencoded' },
                 timeout: 5000
             });
